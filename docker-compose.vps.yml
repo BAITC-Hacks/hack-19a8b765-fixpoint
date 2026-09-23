@@ -1,0 +1,32 @@
+name: saqta
+services:
+  api:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      SESSION_ARCHIVE_DIR: /app/runtime/sessions
+    volumes:
+      - ./runtime/sessions:/app/runtime/sessions
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+  web:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.web
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:80"
+    depends_on:
+      api:
+        condition: service_healthy
+  tunnel:
+    image: cloudflare/cloudflared:2026.9.1
+    command: ["tunnel", "--no-autoupdate", "--url", "http://web:80"]
+    restart: unless-stopped
+    depends_on:
+      web:
+        condition: service_started

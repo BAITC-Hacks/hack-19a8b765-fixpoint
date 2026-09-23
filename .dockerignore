@@ -1,6 +1,17 @@
 .git
 .env
+.env.*
+!.env.example
 .venv
+**/node_modules
+frontend/dist
+runtime
+backend/runtime
+secrets
+.codex
+.agents
+artifacts
+tmp
 **/__pycache__
 .pytest_cache
 reports
