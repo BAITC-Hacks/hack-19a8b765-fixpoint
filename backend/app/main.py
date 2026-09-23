@@ -19,7 +19,6 @@ from .core.router import Router
 from .services.llm import LLM, ProviderError
 
 catalog = Catalog(settings.data_dir)
-MAX_AUDIO = 12 * 1024 * 1024
 sessions = {}
 
 @asynccontextmanager
@@ -38,14 +37,14 @@ def decode_audio(value):
         data = base64.b64decode(value, validate=True)
     except (ValueError, binascii.Error) as e:
         raise ValueError('Некорректное base64-аудио.') from e
-    if len(data) > MAX_AUDIO:
-        raise ValueError('Запись слишком большая: максимум 12 МБ.')
+    if len(data) > settings.max_audio_bytes:
+        raise ValueError(f'Запись слишком большая: максимум {settings.max_audio_bytes // (1024 * 1024)} МБ.')
     return data
 
 def session(session_id):
     now = monotonic()
     for key, value in list(sessions.items()):
-        if now-value['at'] > 3600 and not value['lock'].locked():
+        if now-value['at'] > settings.session_ttl_seconds and not value['lock'].locked():
             del sessions[key]
     if session_id:
         if session_id not in sessions:
@@ -53,7 +52,7 @@ def session(session_id):
         entry = sessions[session_id]
         entry['at'] = now
         return session_id, entry
-    if len(sessions) >= 100:
+    if len(sessions) >= settings.max_sessions:
         raise HTTPException(503, 'Слишком много активных сессий.')
     key = str(uuid4())
     entry = {'engine':Engine(catalog, app.state.llm), 'lock':asyncio.Lock(), 'at':now,
@@ -80,7 +79,7 @@ async def execute_turn(req, key, entry, send=None):
             return previous['result']
         if entry['engine'].state.closed:
             raise HTTPException(409, 'Разговор завершён. Начните новую сессию.')
-        if len(entry['requests']) >= 1000:
+        if entry['engine'].state.turn >= settings.max_session_turns:
             raise HTTPException(409, 'Лимит ходов сессии достигнут. Начните новый разговор.')
         record = {'fingerprint':fingerprint, 'result':None, 'emitted':[]}
         entry['requests'][req.request_id] = record
@@ -98,6 +97,20 @@ async def execute_turn(req, key, entry, send=None):
                     connected = False
         try:
             audio = decode_audio(req.audio_base64) if req.audio_base64 else None
+            duration_ms = req.audio_duration_ms
+            is_wav = req.mime.split(';')[0] in ('audio/wav', 'audio/x-wav')
+            if audio and is_wav:
+                import io
+                import wave
+                try:
+                    with wave.open(io.BytesIO(audio), 'rb') as wav:
+                        duration_ms = wav.getnframes() * 1000 / wav.getframerate()
+                except (wave.Error, EOFError, ZeroDivisionError) as exc:
+                    raise ValueError('Некорректный WAV файл.') from exc
+            if audio and not is_wav and duration_ms is None:
+                raise ValueError('Для аудио не в WAV передайте duration_ms.')
+            if duration_ms is not None and duration_ms > settings.max_recording_seconds * 1000:
+                raise ValueError(f'Запись длиннее {settings.max_recording_seconds:g} секунд.')
             async for event in engine.run(req.text, req.language, audio, req.mime, req.speak, req.demo_scenario):
                 events.append(event)
                 kind = event['event']
@@ -111,6 +124,7 @@ async def execute_turn(req, key, entry, send=None):
             events.append(event)
             await emit(event,wire_event(entry,'error',{'message':str(e)},turn_id))
         trace = trace_from(events,engine)
+        trace.turn_id = turn_id
         result = TurnResponse(session_id=key,request_id=req.request_id,turn_id=turn_id,
             text=next((e['text'] for e in events if e['event']=='assistant_response'),None),
             state=copy.deepcopy(engine.state.public()),trace=trace,events=events).model_dump()
@@ -203,6 +217,7 @@ async def voice(ws: WebSocket,session_id: str | None = None):
     buffer = bytearray()
     audio_invalid = False
     mime,language = 'audio/wav','auto'
+    audio_started_at = None
     try:
         while True:
             message = await ws.receive()
@@ -212,14 +227,17 @@ async def voice(ws: WebSocket,session_id: str | None = None):
                 await error('Сессия закрыта.')
                 break
             entry['at'] = monotonic()
+            if len((message.get('text') or '').encode('utf-8')) > settings.max_ws_message_bytes:
+                await error('Сообщение превышает допустимый размер.')
+                continue
             if message.get('bytes') is not None:
                 if audio_invalid:
                     continue
                 buffer.extend(message['bytes'])
-                if len(buffer)>MAX_AUDIO:
+                if len(buffer)>settings.max_audio_bytes:
                     buffer.clear()
                     audio_invalid = True
-                    await error('Запись превышает 12 МБ.')
+                    await error(f"Запись превышает {settings.max_audio_bytes // (1024 * 1024)} МБ.")
                 continue
             try:
                 data = json.loads(message.get('text') or '{}')
@@ -233,6 +251,7 @@ async def voice(ws: WebSocket,session_id: str | None = None):
                     buffer.clear()
                     audio_invalid = False
                     mime,language = payload.get('mime','audio/wav'),payload.get('language','auto')
+                    audio_started_at = monotonic()
                 elif event in ('audio.chunk','audio_chunk'):
                     if audio_invalid:
                         continue
@@ -243,10 +262,10 @@ async def voice(ws: WebSocket,session_id: str | None = None):
                         audio_invalid = True
                         raise
                     buffer.extend(chunk)
-                    if len(buffer)>MAX_AUDIO:
+                    if len(buffer)>settings.max_audio_bytes:
                         buffer.clear()
                         audio_invalid = True
-                        raise ValueError('Запись превышает 12 МБ.')
+                        raise ValueError(f"Запись превышает {settings.max_audio_bytes // (1024 * 1024)} МБ.")
                 elif event in ('text.submit','text_input','audio.end','speech_end'):
                     if event in ('audio.end','speech_end') and audio_invalid:
                         buffer.clear()
@@ -254,15 +273,35 @@ async def voice(ws: WebSocket,session_id: str | None = None):
                         continue
                     audio = bytes(buffer) if event in ('audio.end','speech_end') else None
                     buffer.clear()
+                    duration_ms = payload.get('duration_ms')
+                    if audio and duration_ms is None and audio_started_at is not None:
+                        duration_ms = (monotonic() - audio_started_at) * 1000
+                    if event in ('audio.end','speech_end'):
+                        audio_started_at = None
                     req = TurnRequest(session_id=key,request_id=data.get('request_id') or str(uuid4()),
                         text=payload.get('text',''),language=payload.get('language',language),mime=mime,
                         audio_base64=base64.b64encode(audio).decode() if audio else None,
+                        audio_duration_ms=duration_ms,
                         speak=payload.get('speak',False if modern else True))
                     await execute_turn(req,key,entry,send)
                 elif event in ('playback.started','playback_started'):
                     ms = float(payload['ttfa_ms'])
                     if not 0<=ms<=300000:
                         raise ValueError('Некорректная задержка воспроизведения.')
+                    turn_id = payload.get('turn_id') or data.get('turn_id')
+                    trace = next((item for item in entry['traces'] if item.get('turn_id') == turn_id), None)
+                    if trace is not None:
+                        trace.setdefault('playback', {}).update({'started':True, 'ttfa_ms':round(ms,1)})
+                        trace.setdefault('latency_ms', {})['total'] = round(ms,1)
+                        for record in entry['requests'].values():
+                            result = record.get('result')
+                            if result and result.get('turn_id') == turn_id:
+                                result['trace'] = copy.deepcopy(trace)
+                            for raw, wire in record.get('emitted', []):
+                                if wire and wire.get('type') == 'trace.updated' and wire.get('turn_id') == turn_id:
+                                    wire['payload'] = copy.deepcopy(trace)
+                    elif turn_id:
+                        raise ValueError('Ход для метрики воспроизведения не найден.')
                     await send({'event':'playback_metric','client_ttfa_ms':ms},wire_event(entry,'playback.metric',{'client_ttfa_ms':ms,'source':'client_reported'}))
                 else:
                     raise ValueError('Неизвестное событие.')

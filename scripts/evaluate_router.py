@@ -31,8 +31,7 @@ async def main(args):
                 predictions[u['id']]=[s.scenario_id for s in d.scenarios]
                 trace.append({'id':u['id'],'decision':d.model_dump(),'ms':round((time.perf_counter()-start)*1000,1)})
             except ProviderError as e:
-                predictions[u['id']]=[]
-                trace.append({'id':u['id'],'error':str(e)})
+                raise SystemExit(f"Evaluation stopped at {u['id']}; no complete metrics were produced: {e}") from e
             print(f"{i+1}/{len(records)} {u['id']} {predictions[u['id']]}",flush=True)
             await asyncio.sleep(args.delay)
     finally:

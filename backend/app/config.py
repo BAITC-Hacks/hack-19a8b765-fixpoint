@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Literal
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -12,7 +13,14 @@ class Settings(BaseSettings):
     llm_model: str = ''
     mock_mode: bool = False
     tts_provider: Literal['edge','none'] = 'edge'
-    request_timeout: float = 35
+    request_timeout: float = Field(default=35, gt=0, le=120)
+    max_text_chars: int = Field(default=4000, ge=1, le=10000)
+    max_audio_bytes: int = Field(default=12 * 1024 * 1024, ge=1, le=16 * 1024 * 1024)
+    max_recording_seconds: float = Field(default=60, gt=0, le=300)
+    session_ttl_seconds: float = Field(default=1800, gt=0)
+    max_sessions: int = Field(default=100, ge=1)
+    max_session_turns: int = Field(default=1000, ge=1)
+    max_ws_message_bytes: int = Field(default=16_777_216, ge=1024, le=16_777_216)
     data_dir: Path = ROOT / 'case' / 'voice_router_dataset'
     allowed_origins: str = 'http://localhost:3000,http://localhost:4173,http://127.0.0.1:4173,http://localhost:5173,http://localhost:8000,http://127.0.0.1:5173,http://127.0.0.1:8000'
 

@@ -25,7 +25,7 @@ class LLM:
                     headers={'Authorization': f'Bearer {self.settings.key}'},
                     json={'model': self.settings.model, 'messages': messages, 'temperature': 0,
                           'max_tokens': 1600, 'response_format': {'type': 'json_object'}})
-                if r.status_code in (429, 502, 503) and attempt == 0:
+                if r.status_code in (408, 425, 429, 500, 502, 503, 504) and attempt == 0:
                     await asyncio.sleep(0.4)
                     continue
                 if r.is_error:
@@ -41,6 +41,11 @@ class LLM:
                         raise ProviderError('LLM вернула ответ, не соответствующий схеме.')
                     messages.append({'role': 'assistant', 'content': content})
                     messages.append({'role': 'user', 'content': 'Fix the JSON to strictly match the supplied schema. No extra properties.'})
+            except (httpx.TimeoutException, httpx.NetworkError) as e:
+                if attempt == 0:
+                    await asyncio.sleep(0.4)
+                    continue
+                raise ProviderError('LLM не ответила после повторной попытки. Проверьте сеть и настройки.') from e
             except httpx.HTTPError as e:
                 raise ProviderError('Не удалось связаться с LLM. Проверьте сеть и настройки.') from e
         raise ProviderError('LLM недоступна после повторной попытки.')

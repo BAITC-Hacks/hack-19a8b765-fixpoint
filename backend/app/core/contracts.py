@@ -2,14 +2,16 @@
 from typing import Any, Literal
 from uuid import uuid4
 from pydantic import BaseModel, Field
+from ..config import settings
 
 class TurnRequest(BaseModel):
     session_id: str | None = None
     request_id: str = Field(default_factory=lambda: str(uuid4()), min_length=1, max_length=100)
-    text: str = Field(default='', max_length=5000)
+    text: str = Field(default='', max_length=settings.max_text_chars)
     language: Literal['auto', 'ru', 'kk'] = 'auto'
     speak: bool = False
-    audio_base64: str | None = Field(default=None, max_length=17_000_000)
+    audio_base64: str | None = Field(default=None, max_length=settings.max_audio_bytes * 4 // 3 + 4)
+    audio_duration_ms: float | None = Field(default=None, ge=0, le=300_000)
     mime: str = 'audio/wav'
     demo_scenario: str | None = None
 
@@ -26,6 +28,10 @@ class TurnTrace(BaseModel):
     latency_ms: dict[str, float | None] = Field(default_factory=dict)
     status: str = 'error'
     mode: str
+    turn_id: str | None = None
+    input_source: str = 'text'
+    playback: dict[str, Any] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
 
 class TurnResponse(BaseModel):
@@ -50,6 +56,8 @@ def trace_from(events, engine):
         slots={s['scenario_id']:s.get('slots', {}) for s in routing.get('scenarios', [])},
         actions=execution.get('actions', []), status=execution.get('status', 'error'), mode=engine.llm.settings.provider,
         errors=[e['message'] for e in events if e['event']=='error'],
+        warnings=[e['message'] for e in events if e['event']=='warning'],
+        input_source=by_event.get('stt_transcript', {}).get('source', 'text'),
         latency_ms={'stt':timings.get('stt_ms'), 'triage':None, 'router':timings.get('routing_ms'),
                     'scenario':timings.get('scenario_ms'), 'response':timings.get('response_ms'),
                     'tts_first_audio':timings.get('tts_first_segment_ms'),

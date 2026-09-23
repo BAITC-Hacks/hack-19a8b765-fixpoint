@@ -1,5 +1,6 @@
 from typing import Any, Literal
 from pydantic import BaseModel, Field, ConfigDict
+from ..config import settings
 
 class Candidate(BaseModel):
     model_config = ConfigDict(extra='forbid')
@@ -27,5 +28,5 @@ class Answer(BaseModel):
     text: str = Field(min_length=1, max_length=1800)
 
 class TextRequest(BaseModel):
-    text: str = Field(min_length=1, max_length=5000)
+    text: str = Field(min_length=1, max_length=settings.max_text_chars)
     language: Literal['auto', 'ru', 'kk'] = 'auto'

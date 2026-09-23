@@ -30,6 +30,9 @@ class Catalog:
                 raise ValueError(f"Unknown boundary target in {s['scenario_id']}")
             if any(a not in self.actions for a in s['actions']):
                 raise ValueError(f"Unknown action in {s['scenario_id']}")
+            irreversible = [a for a in s['actions'] if self.actions[a]['irreversible']]
+            if irreversible and not s.get('requires_confirmation'):
+                raise ValueError(f"{s['scenario_id']} includes irreversible actions without confirmation: {', '.join(irreversible)}")
             if any(k not in self.slots for k in s['slots']['required'] + s['slots']['optional']):
                 raise ValueError(f"Unknown slot in {s['scenario_id']}")
             if s['handoff'] and s['handoff']['queue'] not in self.raw['actions']['queues']:
