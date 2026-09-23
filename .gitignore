@@ -1,0 +1,64 @@
+# Local credentials; commit only sanitized configuration templates.
+.env
+.env.*
+!.env.example
+!.env.*.example
+/secrets/
+
+# Python environments, bytecode, tool caches and package artifacts.
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+/backend/build/
+/backend/dist/
+.coverage
+.coverage.*
+htmlcov/
+
+# Node / Vite dependencies, generated output and caches.
+node_modules/
+/frontend/dist/
+.vite/
+*.tsbuildinfo
+.eslintcache
+coverage/
+
+# Generated browser-test output.
+playwright-report/
+test-results/
+blob-report/
+
+# Runtime output: store recordings, synthesized audio, session dumps and
+# raw traces here. Do not ignore all JSON/audio: fixtures belong in Git.
+/runtime/
+/backend/runtime/
+/artifacts/
+/tmp/
+*.log
+
+# Local evaluator output for the command documented in AGENTS.md.
+# Curated evaluation reports and fixtures elsewhere remain versioned.
+/predictions.json
+/case/voice_router_dataset/predictions.json
+
+# OS metadata and editor-local state.
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+*.swp
+*.swo
+*~
+
+# Keep source data, documentation, test fixtures and dependency lockfiles.
+# In particular: case/, docs/, AGENTS.md, package-lock.json and uv.lock.
