@@ -17,7 +17,7 @@ from app.services.llm import LLM, ProviderError
 
 async def main(args):
     if settings.provider=='mock' or not settings.key:
-        raise SystemExit('LLM provider key is missing. No mock accuracy will be reported.')
+        raise SystemExit('OPENAI_API_KEY is missing. No mock accuracy will be reported.')
     catalog=Catalog(settings.data_dir)
     records=json.loads((settings.data_dir/'dev_utterances.json').read_text(encoding='utf-8'))['utterances']
     llm=LLM(settings)
@@ -31,7 +31,8 @@ async def main(args):
                 predictions[u['id']]=[s.scenario_id for s in d.scenarios]
                 trace.append({'id':u['id'],'decision':d.model_dump(),'ms':round((time.perf_counter()-start)*1000,1)})
             except ProviderError as e:
-                raise SystemExit(f"Evaluation stopped at {u['id']}; no complete metrics were produced: {e}") from e
+                predictions[u['id']]=[]
+                trace.append({'id':u['id'],'error':str(e)})
             print(f"{i+1}/{len(records)} {u['id']} {predictions[u['id']]}",flush=True)
             await asyncio.sleep(args.delay)
     finally:
@@ -44,7 +45,7 @@ async def main(args):
     if args.limit:
         print('Partial smoke run only; full-set accuracy is not computed.')
         return
-    result=subprocess.run([sys.executable,str(settings.data_dir/'evaluate.py'),str(p),str(settings.data_dir/'dev_utterances.json')],capture_output=True,text=True,encoding='utf-8')
+    result=subprocess.run([sys.executable,'-X','utf8',str(settings.data_dir/'evaluate.py'),str(p),str(settings.data_dir/'dev_utterances.json')],capture_output=True,text=True,encoding='utf-8')
     print(result.stdout)
     (out/'evaluation.txt').write_text(result.stdout+result.stderr,encoding='utf-8')
     if result.returncode:

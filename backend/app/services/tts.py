@@ -1,18 +1,20 @@
-import asyncio
-import re
+from openai import APIError, APITimeoutError
+from .llm import ProviderError
 
-async def sentences(text, language):
-    """Yield complete MP3 sentence segments, safe to decode independently in Web Audio."""
-    import edge_tts
-    voice = 'kk-KZ-AigulNeural' if language == 'kk' else 'ru-RU-SvetlanaNeural'
-    for sentence in re.split(r'(?<=[.!?])\s+', text.strip()):
-        if not sentence:
-            continue
-        parts = []
-        async with asyncio.timeout(20):
-            async for item in edge_tts.Communicate(sentence, voice).stream():
-                if item['type'] == 'audio':
-                    parts.append(item['data'])
-        if not parts:
-            raise RuntimeError('TTS did not return audio')
-        yield b''.join(parts)
+
+async def sentences(text, language, llm):
+    settings = llm.settings
+    if settings.tts_provider != 'openai' or not settings.openai_api_key:
+        raise ProviderError('Озвучивание недоступно: укажите OPENAI_API_KEY в серверном .env.')
+    try:
+        response = await llm.client.audio.speech.create(
+            model=settings.tts_model,
+            voice=settings.tts_voice,
+            input=text,
+            instructions=('Говори естественно и ясно на казахском языке.' if language == 'kk'
+                          else 'Говори естественно и ясно на русском языке.'),
+            response_format='mp3',
+        )
+        yield response.content
+    except (APIError, APITimeoutError) as exc:
+        raise ProviderError('Сервис озвучивания недоступен. Проверьте сеть, ключ и лимиты.') from exc

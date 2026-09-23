@@ -1,51 +1,39 @@
 import asyncio
 import json
-import httpx
-from pydantic import ValidationError
+
+from openai import AsyncOpenAI, APIError, APITimeoutError
+
 
 class ProviderError(RuntimeError):
     pass
 
+
 class LLM:
     def __init__(self, settings):
         self.settings = settings
-        self.client = httpx.AsyncClient(timeout=settings.request_timeout)
+        self.client = AsyncOpenAI(api_key=settings.openai_api_key or 'unconfigured', timeout=settings.request_timeout)
 
     async def close(self):
-        await self.client.aclose()
+        await self.client.close()
 
     async def structured(self, system, payload, schema):
-        if self.settings.provider == 'mock' or not self.settings.key:
-            raise ProviderError('LLM не подключена. Добавьте API-ключ в .env и перезапустите сервер.')
-        messages = [{'role': 'system', 'content': system + '\nReturn ONLY a JSON object matching this schema:\n' + json.dumps(schema.model_json_schema(), ensure_ascii=False)},
-                    {'role': 'user', 'content': json.dumps(payload, ensure_ascii=False)}]
+        if self.settings.provider != 'openai' or not self.settings.key:
+            raise ProviderError('LLM не подключена. Добавьте OPENAI_API_KEY в серверный .env и перезапустите сервер.')
         for attempt in range(2):
             try:
-                r = await self.client.post(self.settings.api_base + '/chat/completions',
-                    headers={'Authorization': f'Bearer {self.settings.key}'},
-                    json={'model': self.settings.model, 'messages': messages, 'temperature': 0,
-                          'max_tokens': 1600, 'response_format': {'type': 'json_object'}})
-                if r.status_code in (408, 425, 429, 500, 502, 503, 504) and attempt == 0:
-                    await asyncio.sleep(0.4)
+                response = await self.client.responses.parse(
+                    model=self.settings.llm_model,
+                    input=[{'role': 'system', 'content': system},
+                           {'role': 'user', 'content': json.dumps(payload, ensure_ascii=False)}],
+                    text_format=schema,
+                    store=False,
+                )
+                if response.output_parsed is None:
+                    raise ProviderError('LLM не вернула структурированный ответ; действие не выполнялось.')
+                return response.output_parsed
+            except (APIError, APITimeoutError) as exc:
+                if attempt == 0 and getattr(exc, 'status_code', None) in (429, 502, 503):
+                    await asyncio.sleep(.4)
                     continue
-                if r.is_error:
-                    raise ProviderError(f'LLM: HTTP {r.status_code}. Проверьте ключ, модель и лимиты провайдера.')
-                try:
-                    content = r.json()['choices'][0]['message']['content']
-                except (KeyError,IndexError,ValueError,TypeError) as e:
-                    raise ProviderError('LLM вернула некорректный ответ API.') from e
-                try:
-                    return schema.model_validate_json(content)
-                except (ValidationError, ValueError):
-                    if attempt:
-                        raise ProviderError('LLM вернула ответ, не соответствующий схеме.')
-                    messages.append({'role': 'assistant', 'content': content})
-                    messages.append({'role': 'user', 'content': 'Fix the JSON to strictly match the supplied schema. No extra properties.'})
-            except (httpx.TimeoutException, httpx.NetworkError) as e:
-                if attempt == 0:
-                    await asyncio.sleep(0.4)
-                    continue
-                raise ProviderError('LLM не ответила после повторной попытки. Проверьте сеть и настройки.') from e
-            except httpx.HTTPError as e:
-                raise ProviderError('Не удалось связаться с LLM. Проверьте сеть и настройки.') from e
+                raise ProviderError('LLM недоступна. Проверьте серверный ключ, модель, сеть и лимиты.') from exc
         raise ProviderError('LLM недоступна после повторной попытки.')

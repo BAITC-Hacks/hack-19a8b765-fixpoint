@@ -1,6 +1,7 @@
 import base64
 from .context import Dialogue
-from .executor import Executor, explicit_reply
+from .executor import Executor, closing_reply, explicit_reply
+from .fast_answers import factual_answer
 from .latency import LatencyTracker
 from .models import RoutingDecision, Candidate, Answer
 from .router import Router
@@ -10,8 +11,8 @@ from ..services.stt import transcribe
 from ..services.tts import sentences
 
 ANSWER_PROMPT = '''You are a voice assistant for fictional Saqta Insurance, a hackathon simulator.
-Produce 1-2 short sentences in the requested response language. Ask at most one question.
-Only facts supplied in knowledge_base, executor result or verified state may be stated as facts.
+Prefer one short sentence in the requested response language; use two only if needed. Ask at most one question.
+Only facts supplied in the executor result or verified state may be stated as facts.
 Never invent prices, terms, coverage, client data, identifiers, availability or action success.
 Respect the executor status and instruction. Preview is not execution. Handoff is prepared, not a real connection.
 All backend changes and delivery are simulated; say 'в демо' / 'демо режимінде' when reporting them.
@@ -42,10 +43,15 @@ class Engine:
             raise ProviderError('Введите текст или запишите голос.')
         yield {'event':'stt_transcript','turn':turn,'text':text,'duration_ms':clock.metrics['stt_ms'], 'source':'audio' if audio else 'text'}
         with clock.stage('routing_ms'):
+            routing_source = 'dialogue_rule'
             f = state.active
             reply = explicit_reply(text)
             # Confirmation only for the exact pending operation; ordinary yes cannot mutate data.
-            if f and f.done and reply and not (state.queue or state.suspended):
+            if f and f.done and not (state.queue or state.suspended) and closing_reply(text):
+                decision = RoutingDecision(scenarios=[Candidate(scenario_id='SYS_GOODBYE', confidence=1, reason='Клиент завершил разговор после выполненного запроса.')],
+                    language=state.language, response_language=state.language,
+                    reason='Клиент завершил разговор после выполненного запроса.')
+            elif f and f.done and reply and not (state.queue or state.suspended):
                 decision = RoutingDecision(scenarios=[Candidate(scenario_id='SYS_UNCLEAR', confidence=.8, reason='Ожидающей операции нет.')],
                     language=state.language, response_language=state.language, reason='Повторное подтверждение не выполняет действие.',
                     clarification='Операция уже обработана. Чем ещё помочь?' if state.language == 'ru' else 'Операция өңделді. Тағы қалай көмектесе аламын?')
@@ -66,26 +72,31 @@ class Engine:
             elif demo_scenario:
                 if self.llm.settings.provider != 'mock' or demo_scenario not in self.catalog.scenarios:
                     raise ProviderError('Ручной выбор доступен только в демонстрационном режиме.')
+                routing_source = 'manual_demo'
                 decision = RoutingDecision(scenarios=[Candidate(scenario_id=demo_scenario, confidence=1, reason='Сценарий выбран пользователем вручную, без LLM.')],
                     language='kk' if language == 'kk' else 'ru', response_language='kk' if language == 'kk' else 'ru', reason='Ручная демонстрация исполнителя.')
             else:
+                routing_source = 'llm' if self.llm.settings.provider == 'openai' else 'mock'
                 decision = await self.router.route(text, state, language)
         yield {'event':'routing_decision','turn':turn, **decision.model_dump(), 'duration_ms':clock.metrics['routing_ms'],
-               'mode':self.llm.settings.provider, 'manual_demo':bool(demo_scenario)}
+               'mode':self.llm.settings.provider, 'routing_source':routing_source, 'manual_demo':bool(demo_scenario)}
         with clock.stage('scenario_ms'):
             result = self.executor.process(decision, state, text)
         # History is committed only after the router saw the preceding context.
         state.history.append({'role':'user','content':text})
         with clock.stage('response_ms'):
+            quick_answer = factual_answer(result, state, text)
             if self.llm.settings.provider == 'mock':
-                answer = result.get('question') or ('Демонстрационный режим: подключите API-ключ LLM-провайдера для ответов.' if state.language == 'ru' else 'Демо режимі: жауап алу үшін LLM провайдерінің API кілтін қосыңыз.')
+                answer = result.get('question') or ('Демонстрационный режим. Подключите OpenAI для ответов по результатам обработки.' if state.language == 'ru' else 'Демо режимі. Жауап беру үшін OpenAI қосыңыз.')
             elif result.get('question') and not result.get('facts') and not state.queue:
                 answer = result['question']
+            elif quick_answer is not None:
+                answer = quick_answer
             else:
                 try:
                     response = await self.llm.structured(ANSWER_PROMPT,
                         {'user_text':text,'response_language':state.language, 'execution':result,
-                         'knowledge_base':self.catalog.kb, 'state':state.public()}, Answer)
+                         'state':state.public()}, Answer)
                     answer = response.text
                 except ProviderError:
                     # If an operation has already completed, don't encourage blind re-execution.
@@ -94,11 +105,11 @@ class Engine:
         state.history.append({'role':'assistant','content':answer})
         yield {'event':'assistant_response','turn':turn,'text':answer,'language':state.language}
         yield {'event':'execution_trace','turn':turn,'execution':result,'context':state.public()}
-        if speak and self.llm.settings.tts_provider == 'edge':
+        if speak:
             tts_start = clock.elapsed()
             try:
                 index = 0
-                async for data in sentences(answer, state.language):
+                async for data in sentences(answer, state.language, self.llm):
                     if index == 0:
                         clock.metrics['tts_first_segment_ms'] = round(clock.elapsed() - tts_start, 1)
                         clock.metrics['server_first_audio_ms'] = clock.elapsed()
@@ -106,7 +117,7 @@ class Engine:
                            'audio_base64':base64.b64encode(data).decode()}
                     index += 1
             except Exception:
-                yield {'event':'warning','turn':turn,'code':'tts_unavailable','message':'Озвучивание недоступно. Текст ответа сохранён; можно повторить запрос без голоса.'}
+                yield {'event':'warning','turn':turn,'code':'tts_unavailable','message':'Озвучивание недоступно. Текст ответа и результат операции сохранены.'}
         clock.metrics['server_total_ms'] = clock.elapsed()
         yield {'event':'turn_complete','turn':turn,'metrics':clock.metrics,'status':result['status'],
                'ttfa_note':'server_first_audio_ms excludes upload, browser decoding and playback; not end-to-end TTFA.'}

@@ -7,7 +7,13 @@ from ..services.actions import ActionError
 
 YES = {'да', 'да подтверждаю', 'подтверждаю', 'согласен', 'согласна', 'иә', 'растаймын', 'иә растаймын',
        'да верно', 'верно', 'да оформляйте', 'да регистрируйте', 'иә тіркеңіз', 'иә жазыңыз'}
-NO = {'нет', 'не подтверждаю', 'отмена', 'жоқ', 'бас тартамын'}
+NO = {'нет', 'не подтверждаю', 'я не подтверждаю', 'не согласен', 'не согласна',
+      'я не согласен', 'я не согласна', 'отмена', 'жоқ', 'бас тартамын'}
+CLOSING = {'всё хорошо спасибо', 'все хорошо спасибо', 'спасибо до свидания',
+           'до свидания', 'пока', 'рақмет сау болыңыз', 'рахмет сау болыңыз', 'сау болыңыз'}
+
+def closing_reply(text):
+    return ' '.join(re.sub(r'[^\w\s]', '', text.lower()).split()) in CLOSING
 
 def explicit_reply(text):
     value = ' '.join(re.sub(r'[^\w\s]', '', text.lower()).split())
@@ -43,6 +49,8 @@ class Executor:
             return out
         out['actions'].append({'name':'transfer_to_operator', 'mode':'execute', 'result':result})
         out['facts']['handoff'] = result
+        out['facts']['transfer_to_operator'] = result
+        out['facts']['real_transfer'] = result.get('real_transfer', False)
         out['status'] = 'handoff'
         state.closed = True
         if state.active:
@@ -122,6 +130,10 @@ class Executor:
                 state.queue.append(Frame(extra.scenario_id, slots))
         f = state.active
         spec = self.c.scenarios[f.scenario_id]
+        if f.done and decision.is_continuation and not (state.queue or state.suspended):
+            out.update(status='completed', question=('Этот запрос уже обработан. Чем ещё помочь?'
+                       if lang == 'ru' else 'Бұл сұрау өңделді. Тағы қалай көмектесе аламын?'))
+            return out
         if spec['priority'] == 'urgent':
             out['facts']['safety'] = {'SC11':self.c.kb['claims']['road_accident_now'],
                 'SC15':self.c.kb['products']['travel']['notes'], 'SC38':self.c.kb['fraud_policy']}[f.scenario_id]
@@ -214,6 +226,7 @@ class Executor:
         s.setdefault('franchise', 0)
         if f.scenario_id == 'SC11' and (s.get('injured') is True or decision.needs_operator):
             out['facts']['safety'] = self.c.kb['claims']['road_accident_now']
+            out['facts']['kb_lookup'] = {'section':'claims', 'key':'road_accident_now'}
             out['instruction'] = 'Сначала срочная инструкция из safety, затем сообщи о подготовке передачи оператору в демо.'
             return self.finish_handoff(state, out, 'claims_team')
         required = list(spec['slots']['required'])

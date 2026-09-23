@@ -3,89 +3,198 @@ import type { Language } from './types';
 import { useMicrophone } from './hooks/useMicrophone';
 import { useSession } from './hooks/useSession';
 import TracePanel from './components/TracePanel';
-import DesignPreview from './components/DesignPreview';
+import { confidenceDisplay } from './confidence';
+import AudioVisualizer from './components/AudioVisualizer';
+import SessionArchive from './components/SessionArchive';
+import { endOfSpeechForSlot } from './voiceActivity';
 
-function MicIcon({ stop = false }: { stop?: boolean }) {
-  return <svg viewBox="0 0 24 24" width="22" height="22" fill="none" aria-hidden="true">{stop
-    ? <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" />
-    : <><rect x="9" y="3" width="6" height="12" rx="3" stroke="currentColor" strokeWidth="1.7" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" /></>}</svg>;
-}
+const params = new URLSearchParams(location.search);
 
 export default function App() {
   const session = useSession();
-  const [preview, setPreview] = useState(false);
+  const [phase, setPhase] = useState<'idle' | 'connecting' | 'preparing' | 'listening' | 'processing' | 'speaking'>('idle');
   const [draft, setDraft] = useState('');
-  const [language, setLanguage] = useState<Language>('ru');
-  const [speaking, setSpeaking] = useState(false);
-  const [audioError, setAudioError] = useState('');
-  const [voiceLanguage, setVoiceLanguage] = useState('');
-  const mic = useMicrophone(text => { setDraft(previous => [previous.trim(), text].filter(Boolean).join(' ').slice(0, 4000)); input.current?.focus(); });
-  const input = useRef<HTMLTextAreaElement>(null);
+  const [language, setLanguage] = useState<Language>('auto');
+  const [error, setError] = useState('');
+  const [active, setActive] = useState(false);
+  const [devOpen, setDevOpen] = useState(params.has('dev') || params.has('jury'));
+  const [queuedText, setQueuedText] = useState<string | null>(null);
+  const devPanel = useRef<HTMLDialogElement>(null);
+  const devToggle = useRef<HTMLButtonElement>(null);
+  const activeRef = useRef(false);
+  const player = useRef<HTMLAudioElement | null>(null);
+  const audioUrl = useRef<string | null>(null);
+  const lastAudioTurn = useRef('');
   const history = useRef<HTMLDivElement>(null);
-  const stickToBottom = useRef(true);
-  const connecting = session.connection === 'connecting';
-  const listening = mic.phase !== 'idle';
-  const blocked = session.busy || connecting || session.closed;
-  useEffect(() => { if (history.current && stickToBottom.current) history.current.scrollTop = history.current.scrollHeight; }, [session.messages, mic.partial]);
+  const mic = useMicrophone((blob, endedAt) => {
+    if (!activeRef.current) return;
+    setPhase('processing');
+    void session.sendAudio(blob, language, endedAt).then(ok => {
+      if (!ok && activeRef.current) stop('Не удалось отправить запись. Проверьте соединение и начните разговор снова.');
+    });
+  });
+
+  function stop(message = '') {
+    activeRef.current = false;
+    setActive(false);
+    mic.abort();
+    player.current?.pause();
+    player.current = null;
+    if (audioUrl.current) URL.revokeObjectURL(audioUrl.current);
+    audioUrl.current = null;
+    session.end();
+    setPhase('idle');
+    if (message) setError(message);
+  }
+  async function start() {
+    setError('');
+    mic.clearError();
+    session.reset();
+    activeRef.current = true;
+    setActive(true);
+    setPhase('connecting');
+    const connected = await session.connect();
+    if (!connected || !activeRef.current) {
+      if (activeRef.current) stop('Не удалось соединиться с сервером. Проверьте запуск FastAPI.');
+      return;
+    }
+    setPhase('preparing');
+    const recording = await mic.start();
+    if (!recording || !activeRef.current) {
+      if (activeRef.current) stop(recording ? '' : 'Микрофон недоступен. Разрешите доступ и начните разговор снова.');
+      else mic.abort();
+      return;
+    }
+    setPhase('listening');
+  }
   useEffect(() => {
-    const update = () => setVoiceLanguage(window.speechSynthesis?.getVoices().find(v => v.lang.toLowerCase().startsWith(language))?.lang ?? '');
-    update(); window.speechSynthesis?.addEventListener('voiceschanged', update);
-    return () => window.speechSynthesis?.removeEventListener('voiceschanged', update);
-  }, [language]);
-  useEffect(() => () => window.speechSynthesis?.cancel(), []);
+    const item = session.completedAudio;
+    if (!item || item.turnId === lastAudioTurn.current || !activeRef.current || phase !== 'processing') return;
+    lastAudioTurn.current = item.turnId;
+    if (item.failed || !item.segments.length) {
+      stop(item.error || 'Ответ получен, но сервер не смог его озвучить. Текст ответа показан ниже.');
+      return;
+    }
+    const bytes = item.segments.map(segment => Uint8Array.from(atob(segment), c => c.charCodeAt(0)));
+    const blob = new Blob(bytes, { type: item.mime });
+    const url = URL.createObjectURL(blob);
+    audioUrl.current = url;
+    const audio = new Audio(url);
+    player.current = audio;
+    let reported = false;
+    audio.onplaying = () => {
+      setPhase('speaking');
+      if (!reported && item.endedAt > 0) {
+        reported = true;
+        session.reportPlayback(Math.round(performance.now() - item.endedAt), item.turnId);
+      }
+    };
+    audio.onended = () => {
+      URL.revokeObjectURL(url);
+      audioUrl.current = null;
+      player.current = null;
+      if (!activeRef.current) return;
+      if (session.closed) { stop(); return; }
+      setPhase('preparing');
+      void mic.start(endOfSpeechForSlot(session.waitingSlot)).then(ok => {
+        if (!activeRef.current) { if (ok) mic.abort(); return; }
+        if (!ok) stop('Микрофон перестал работать. Проверьте доступ и начните разговор снова.');
+        else setPhase('listening');
+      });
+    };
+    audio.onerror = () => stop('Не удалось воспроизвести голосовой ответ. Проверьте звук и начните разговор снова.');
+    void audio.play().catch(() => stop('Браузер заблокировал воспроизведение звука. Разрешите звук для сайта и начните разговор снова.'));
+  }, [session.completedAudio, phase]);
+  useEffect(() => { if (history.current) history.current.scrollTop = history.current.scrollHeight; }, [session.messages]);
+  useEffect(() => { if (active && session.connection === 'local' && phase !== 'connecting') stop('Соединение потеряно. Начните разговор снова.'); }, [session.connection]);
+  useEffect(() => { if (active && mic.error) stop(mic.error); }, [mic.error]);
+  useEffect(() => () => {
+    activeRef.current = false;
+    player.current?.pause();
+    if (audioUrl.current) URL.revokeObjectURL(audioUrl.current);
+  }, []);
 
-  function send() {
-    if (blocked || listening || speaking) return;
-    if (session.send(draft, language)) setDraft('');
-  }
-  function stopSound() { window.speechSynthesis?.cancel(); setSpeaking(false); }
-  function speak(text: string) {
-    stopSound(); setAudioError('');
-    if (!voiceLanguage) { setAudioError('Для выбранного языка в браузере нет голоса. Текст ответа доступен.'); return; }
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = voiceLanguage;
-    utterance.onstart = () => setSpeaking(true);
-    utterance.onend = () => setSpeaking(false);
-    utterance.onerror = e => { setSpeaking(false); if (e.error !== 'interrupted' && e.error !== 'canceled') setAudioError('Не удалось воспроизвести ответ.'); };
-    window.speechSynthesis.speak(utterance);
-  }
-  function reset() { mic.abort(); mic.clearError(); stopSound(); setAudioError(''); setDraft(''); session.reset(); }
-  const status = mic.phase === 'starting' ? 'Ожидаю доступ к микрофону…' : mic.phase === 'listening' ? 'Слушаю вас…' : mic.phase === 'stopping' ? 'Завершаю распознавание…' : speaking ? 'Воспроизвожу ответ' : session.busy ? 'Обрабатываю сообщение…' : connecting ? 'Подключаюсь…' : session.closed ? 'Разговор завершён' : 'Можно говорить или написать';
+  useEffect(() => {
+    if (devOpen) devPanel.current?.showModal();
+    else if (devPanel.current?.open) { devPanel.current.close(); devToggle.current?.focus(); }
+  }, [devOpen]);
+  useEffect(() => {
+    if (queuedText === null || session.connection !== 'online' || session.closed) return;
+    if (session.send(queuedText, language)) setDraft('');
+    else setError('Не удалось отправить сообщение. Попробуйте снова.');
+    setQueuedText(null);
+  }, [queuedText, session.connection, session.closed]);
 
-  if (preview) return <DesignPreview onExit={() => setPreview(false)} />;
+  async function sendText() {
+    if (!draft.trim() || active || session.busy || queuedText !== null) return;
+    setError('');
+    mic.clearError();
+    if (session.connection === 'online' && !session.closed) {
+      if (session.send(draft, language)) setDraft('');
+      return;
+    }
+    setQueuedText(draft);
+    if (session.closed) session.reset();
+    if (!await session.connect()) setQueuedText(null);
+  }
+  const status = phase === 'connecting' ? 'Подключаюсь…' : phase === 'preparing' ? 'Готовлю микрофон…' : phase === 'listening' ? 'Слушаю вас…' :
+    phase === 'processing' ? 'Обрабатываю реплику…' : phase === 'speaking' ? 'Отвечаю…' :
+    queuedText !== null ? 'Подключаюсь…' : session.busy ? 'Готовлю ответ…' : 'Нажмите кнопку и говорите';
+  const visibleError = error || mic.error || session.error;
+  const latestTrace = session.traces.at(-1);
+  const confidence = latestTrace ? confidenceDisplay(latestTrace) : null;
 
   return <div className="app">
-    <header className="header"><a className="brand" href="/" aria-label="Saqta — главная"><span className="brand-symbol" aria-hidden="true">s.</span><span>Saqta<span className="brand-caption">Голосовой помощник</span></span></a>
-      <div className="header-actions"><button onClick={() => { mic.abort(); stopSound(); setPreview(true); }} disabled={session.busy || connecting}>Предпросмотр дизайна</button><button className="new-chat" onClick={reset} disabled={session.busy || connecting}><span aria-hidden="true">＋</span> Новый разговор</button></div>
-    </header>
-    <main>
-      <div className="page-heading"><div><p className="eyebrow">SAQTA INSURANCE</p><h1>Давайте поговорим</h1><p className="muted">На русском или қазақша. Голосом или текстом.</p></div><span className="demo-label">Тестовая среда</span></div>
-      <section className="chat" aria-label="Разговор с помощником">
-        <div className="chat-header"><span>Разговор</span><span className="connection">{session.connection === 'online' ? 'Сервер подключён' : connecting ? 'Подключение' : 'Проверка интерфейса'}</span></div>
-        <div className="history" ref={history} role="log" aria-label="История разговора" aria-live="polite" onScroll={e => { const el = e.currentTarget; stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60; }}>
-          {!session.messages.length && <div className="empty"><div className="empty-icon"><MicIcon /></div><h2>С чего начнём?</h2><p>Нажмите микрофон или напишите свой вопрос.<br />Распознанную речь можно проверить перед отправкой.</p></div>}
-          {session.messages.map(message => <article key={message.id} className={`message ${message.role}`}><span className="message-role">{message.role === 'user' ? 'Вы' : 'Saqta'}</span><p>{message.text}</p>{message.local && <small>Сохранено здесь · сервер не подключён</small>}{message.role === 'assistant' && <button className="text-button" disabled={listening || !voiceLanguage} onClick={() => speak(message.text)}>Озвучить ответ</button>}</article>)}
-          {mic.partial && <div className="partial"><span>Распознавание…</span><p>{mic.partial}</p></div>}
-          {session.busy && <p className="muted processing">Помощник обрабатывает вашу реплику…</p>}
-        </div>
-        <div className="controls">
-          {(mic.error || session.error || audioError) && <div className="error" role="alert">{mic.error || session.error || audioError}</div>}
-          <div className="voice-status" role="status"><span className={mic.phase === 'listening' ? 'recording-dot' : 'idle-dot'} />{status}</div>
-          {session.closed ? <div className="conversation-ended"><p>История доступна выше. Для следующего вопроса начните новый разговор.</p><button className="primary" onClick={reset}>Начать новый разговор</button></div> : <>
-          <div className="voice-controls">
-            <label className="language">Язык речи<select value={language} onChange={e => setLanguage(e.target.value as Language)} disabled={listening || blocked || speaking}><option value="ru">Русский</option><option value="kk">Қазақша</option></select></label>
-            <button className={`primary microphone ${listening ? 'recording' : ''}`} onClick={() => { if (listening) mic.stop(); else { stopSound(); mic.start(language); } }} disabled={blocked || !mic.supported || mic.phase === 'stopping'} aria-pressed={listening}><MicIcon stop={listening} />{listening ? 'Завершить реплику' : 'Начать говорить'}</button>
-            {speaking && <button onClick={stopSound}>Остановить звук</button>}
-          </div>
-          {!mic.supported && <p className="notice">Этот браузер не поддерживает распознавание. Откройте в Chrome или введите текст.</p>}
-          <form className="composer" onSubmit={e => { e.preventDefault(); send(); }}><label className="sr-only" htmlFor="message">Ваше сообщение</label><textarea id="message" ref={input} value={draft} maxLength={4000} disabled={blocked || listening || speaking} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); } }} placeholder="Введите сообщение…" rows={2} /><button className="send" type="submit" disabled={!draft.trim() || blocked || listening || speaking} aria-label="Отправить сообщение"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" aria-hidden="true"><path d="m5 12 7-7 7 7M12 5v15" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg></button></form>
-          <p className="input-help">Enter — отправить · Shift + Enter — новая строка</p>
-          </>}
+    <button ref={devToggle} className="dev-toggle" aria-label="Открыть инструменты разработчика" aria-expanded={devOpen} aria-controls="dev-panel" onClick={() => setDevOpen(true)}>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="m8 7-5 5 5 5m8-10 5 5-5 5m-3-14-2 18" /></svg><span>dev</span>
+    </button>
+    <main className="voice-page">
+      <h1>Чем можем помочь?<span lang="kk">Қалай көмектесе аламыз?</span></h1>
+      <div className="voice-interaction">
+        <button className={`primary conversation-button ${active ? 'recording' : ''}`} disabled={!active && (session.busy || queuedText !== null || session.connection === 'connecting')} onClick={() => active ? stop() : void start()} aria-pressed={active} aria-label={active ? 'Завершить разговор' : 'Начать разговор'} title={active ? 'Завершить разговор' : 'Начать разговор'}>
+          {active ? <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="3" /></svg> : <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true"><rect x="9" y="2" width="6" height="13" rx="3" /><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8" /></svg>}
+        </button>
+        {active && <AudioVisualizer analyserRef={mic.analyserRef} listening={phase === 'listening'} />}
+        <p className="voice-status" role="status">{status}</p>
+      </div>
+      <form className="composer" onSubmit={event => { event.preventDefault(); void sendText(); }}>
+        <label className="sr-only" htmlFor="message">Сообщение / Хабарлама</label>
+        <textarea id="message" value={draft} onChange={event => setDraft(event.target.value)} maxLength={4000} rows={2} placeholder="Или напишите нам / Немесе жазыңыз" disabled={session.busy || active || queuedText !== null} onKeyDown={event => {
+          if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void sendText(); }
+        }} />
+        <button className="send" type="submit" aria-label="Отправить сообщение" disabled={!draft.trim() || session.busy || active || queuedText !== null || session.connection === 'connecting'}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6" /></svg>
+        </button>
+      </form>
+      {visibleError && <p className="error" role="alert">{visibleError}</p>}
+      <section className={`conversation-text ${session.messages.length ? 'has-messages' : ''}`} aria-label="Текст разговора">
+        <div className="history" ref={history} role="log" aria-live="polite">
+          {session.messages.map(message =>
+            <article key={message.id} className={`message ${message.role}`}>
+              <strong className="message-role">{message.role === 'user' ? 'Вы' : 'Saqta'}</strong>
+              <p>{message.text}</p>
+            </article>)}
         </div>
       </section>
-      <div className="integration"><p>{session.connection === 'online' ? 'Операции выполняются в тестовых данных.' : 'Распознавание можно проверить сейчас. Для ответов помощника нужен сервер.'}</p>{session.connection !== 'online' && <button className="text-button" disabled={connecting || listening || session.busy} onClick={() => { stopSound(); void session.connect(); }}>{connecting ? 'Подключение…' : 'Подключить сервер'}</button>}</div>
-      <TracePanel traces={session.traces} />
-      <footer>Проверка голоса использует сервис браузера: аудио может обрабатываться онлайн. Поддержка қазақша зависит от сервиса и требует проверки.</footer>
+      <p className="demo-note">Демонстрация · Все операции выполняются на тестовых данных.</p>
     </main>
+    <dialog ref={devPanel} id="dev-panel" className="developer" aria-labelledby="dev-title" onCancel={() => setDevOpen(false)} onClose={() => setDevOpen(false)} onClick={event => { if (event.target === event.currentTarget) setDevOpen(false); }}>
+      <div className="developer-content">
+        <div className="developer-heading"><div><p className="eyebrow">SAQTA · DEV MODE</p><h2 id="dev-title">Инструменты</h2></div><button aria-label="Закрыть инструменты разработчика" onClick={() => setDevOpen(false)}>×</button></div>
+        <dl className="session-status"><dt>Соединение</dt><dd>{session.connection}</dd><dt>Состояние</dt><dd>{phase}</dd></dl>
+        <div className="developer-actions">
+          {session.connection !== 'online' && <button disabled={session.connection === 'connecting' || queuedText !== null} onClick={() => { setError(''); void session.connect(); }}>Подключить сервер</button>}
+          <button disabled={queuedText !== null} onClick={() => { stop(); session.reset(); setError(''); mic.clearError(); setDraft(''); }}>Сбросить разговор</button>
+        </div>
+        <label className="language">Язык для диагностики <select value={language} disabled={active || session.busy || queuedText !== null} onChange={e => setLanguage(e.target.value as Language)}><option value="auto">Автоматически</option><option value="ru">Русский</option><option value="kk">Қазақша</option></select></label>
+        {confidence && <div className={`confidence-card ${confidence.band}`} aria-live="polite">
+        <span>Confidence · последняя реплика · {confidence.scenario}</span>
+        <strong>{confidence.value}</strong>
+        <small>{confidence.note}{latestTrace?.confidence_source === 'llm' ? ' Оценка модели не равна вероятности правильного ответа.' : ''}</small>
+      </div>}
+        <TracePanel traces={session.traces} openByDefault />
+        {devOpen && <SessionArchive />}
+      </div>
+    </dialog>
   </div>;
 }

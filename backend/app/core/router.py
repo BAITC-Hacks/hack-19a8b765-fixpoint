@@ -1,4 +1,6 @@
-from .models import RoutingDecision, Candidate
+import json
+from .identifiers import IIN_MARKER, PHONE_MARKER, extract_iins, extract_phones
+from .models import RoutingDecision, Candidate, WireRoutingDecision
 from ..services.llm import ProviderError
 
 ROUTING_PROMPT = '''You route live conversations for fictional Saqta Insurance.
@@ -21,10 +23,8 @@ Confidence is an estimate, not a calibrated probability. Explain in one short ev
 for a supervisor (not private chain-of-thought). If unclear, ask one short question between two
 plausible interpretations. needs_operator is true only for explicit request or catalog handoff condition
 supported by the utterance. Merely mentioning a possible condition is insufficient.
-confirmation is yes/no only for explicit consent/refusal to the CURRENT pending operation;
-never infer consent from polite acknowledgement, a conditional phrase or a question.
-When consent is combined with another question, include the pending scenario first and put the
-new request's slots in its own candidate. Urgent requests still come first and interrupt consent.
+Return every required field. Slot arrays contain {name, value_json}, where value_json is a
+JSON-encoded string (for example \"almaty\", 12, or [\"000000000000\"]); use [] if no slots.
 Do not execute actions or promise success. Routing is your only responsibility.'''
 
 class Router:
@@ -41,11 +41,81 @@ class Router:
                    'as_of_date': str(self.catalog.as_of), 'catalog': self.catalog.routing_catalog(),
                    'system_intents': list(self.catalog.system.values()),
                    'slot_definitions': [{k: v for k, v in s.items() if k != 'prompt'} for s in self.catalog.slots.values()]}
-        d = await self.llm.structured(ROUTING_PROMPT, payload, RoutingDecision)
+        wire = await self.llm.structured(ROUTING_PROMPT, payload, WireRoutingDecision)
+        if isinstance(wire, RoutingDecision):
+            d = wire  # Allows injected decisions in local executor tests.
+        else:
+            try:
+                def slots(values):
+                    parsed = {}
+                    for slot in values:
+                        try:
+                            parsed[slot.name] = json.loads(slot.value_json)
+                        except json.JSONDecodeError:
+                            # A bare place/name is still a string; downstream slot
+                            # validation decides whether that value is permitted.
+                            if slot.value_json.startswith(('[', '{', '"')):
+                                raise
+                            parsed[slot.name] = slot.value_json
+                    return parsed
+                d = RoutingDecision(
+                    scenarios=[Candidate(scenario_id=s.scenario_id, confidence=s.confidence,
+                                         reason=s.reason, slots=slots(s.slots)) for s in wire.scenarios],
+                    alternatives=[Candidate(scenario_id=s.scenario_id, confidence=s.confidence,
+                                            reason=s.reason, slots=slots(s.slots)) for s in wire.alternatives],
+                    language=wire.language, response_language=wire.response_language,
+                    slots=slots(wire.slots), is_continuation=wire.is_continuation,
+                    is_topic_switch=wire.is_topic_switch, resume_previous=wire.resume_previous,
+                    needs_operator=wire.needs_operator, reason=wire.reason, clarification=wire.clarification)
+            except (ValueError, TypeError) as exc:
+                raise ProviderError('LLM вернула неверные значения слотов; действие не выполнялось.') from exc
         allowed = self.catalog.scenarios.keys() | self.catalog.system.keys()
         if any(c.scenario_id not in allowed for c in d.scenarios + d.alternatives):
             raise ProviderError('LLM вернула неизвестный сценарий; действие не выполнялось.')
         seen = set()
         d.scenarios = [c for c in d.scenarios if not (c.scenario_id in seen or seen.add(c.scenario_id))]
         d.scenarios.sort(key=lambda c: self.catalog.scenarios.get(c.scenario_id, {}).get('priority') != 'urgent')
+        if (d.is_continuation and state.active and d.scenarios
+                and d.scenarios[0].scenario_id == state.active.scenario_id):
+            d.scenarios = [d.scenarios[0], *(c for c in d.scenarios[1:] if c.scenario_id != 'SYS_UNCLEAR')]
+        if not d.reason.strip() and d.scenarios:
+            d.reason = d.scenarios[0].reason
+        waiting = state.active.waiting_slot if state.active else None
+        iin_slots = ('drivers_iin', 'new_driver_iin', 'iin')
+        if waiting in iin_slots or IIN_MARKER.search(text):
+            numbers = extract_iins(text)
+            # The transcript, not the model, is the evidence for an identifier.
+            # Remove a guessed IIN if speech contains no complete 12-digit run.
+            d.slots.pop('iin', None)
+            for candidate in d.scenarios:
+                required = self.catalog.scenarios.get(candidate.scenario_id, {}).get('slots', {}).get('required', [])
+                target = (waiting if state.active and candidate.scenario_id == state.active.scenario_id
+                          and waiting in iin_slots else next((key for key in iin_slots if key in required), None))
+                if not target:
+                    continue
+                for key in iin_slots:
+                    candidate.slots.pop(key, None)
+                if target == 'drivers_iin' and numbers:
+                    candidate.slots[target] = numbers
+                elif target != 'drivers_iin' and len(numbers) == 1:
+                    candidate.slots[target] = numbers[0]
+        phone_claimed = (waiting == 'phone' or PHONE_MARKER.search(text)
+                         or 'phone' in d.slots
+                         or any('phone' in c.slots for c in d.scenarios + d.alternatives))
+        if phone_claimed:
+            phones = extract_phones(text)
+            had_shared = 'phone' in d.slots
+            targets = [c for c in d.scenarios if (
+                'phone' in c.slots
+                or (waiting == 'phone' and state.active and c.scenario_id == state.active.scenario_id)
+                or (PHONE_MARKER.search(text) and 'phone' in self.catalog.scenarios.get(c.scenario_id, {}).get('slots', {}).get('required', []))
+            )]
+            d.slots.pop('phone', None)
+            for candidate in d.scenarios + d.alternatives:
+                candidate.slots.pop('phone', None)
+            if len(phones) == 1:
+                if had_shared or not targets:
+                    d.slots['phone'] = phones[0]
+                for candidate in targets:
+                    candidate.slots['phone'] = phones[0]
         return d

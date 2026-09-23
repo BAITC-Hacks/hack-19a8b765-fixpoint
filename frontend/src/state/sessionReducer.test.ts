@@ -21,3 +21,23 @@ test('unknown timings stay null; trace updates replace the same turn', () => {
   assert.equal(updated.traces.length, 1);
   assert.equal(updated.traces[0].latency_ms.total, null);
 });
+
+test('audio transcript and answer share one server turn without duplicates', () => {
+  const transcript = { type: 'event' as const, event: { type: 'transcript.final', event_id: 1, turn_id: 'turn-1', payload: { text: 'Где офис?', source: 'audio' } } };
+  const answer = { type: 'event' as const, event: { type: 'assistant.text', event_id: 2, turn_id: 'turn-1', payload: { text: 'В Алматы.', language: 'ru' } } };
+  const state = sessionReducer(sessionReducer(initialState, transcript), answer);
+  assert.deepEqual(state.messages.map(m => m.text), ['Где офис?', 'В Алматы.']);
+  assert.equal(sessionReducer(state, answer).messages.length, 2);
+  assert.equal(state.messages[1].language, 'ru');
+});
+
+test('next recording gets the awaited identifier slot and clears it after completion', () => {
+  const awaiting = sessionReducer(initialState, { type: 'event', event: {
+    type: 'turn.status', event_id: 1, payload: { event: 'execution_trace', context: { waiting_slot: 'drivers_iin' } },
+  } });
+  assert.equal(awaiting.waitingSlot, 'drivers_iin');
+  const completed = sessionReducer(awaiting, { type: 'event', event: {
+    type: 'turn.status', event_id: 2, payload: { event: 'execution_trace', context: { waiting_slot: null } },
+  } });
+  assert.equal(completed.waitingSlot, null);
+});
