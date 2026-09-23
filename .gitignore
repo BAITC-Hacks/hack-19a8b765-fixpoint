@@ -62,3 +62,6 @@ Desktop.ini
 
 # Keep source data, documentation, test fixtures and dependency lockfiles.
 # In particular: case/, docs/, AGENTS.md, package-lock.json and uv.lock.
+
+/reports/
+.streamlit/secrets.toml

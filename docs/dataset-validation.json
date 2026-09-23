@@ -1,0 +1,33 @@
+{
+  "scenarios": 40,
+  "system_intents": 3,
+  "slots": 43,
+  "actions": 31,
+  "knowledge_sections": 13,
+  "clients": 11,
+  "as_of_date": "2026-10-01",
+  "dev_utterances": 104,
+  "sample_dialogs": 10,
+  "by_language": {
+    "ru": 52,
+    "kk": 45,
+    "mixed": 7
+  },
+  "by_type": {
+    "single": 84,
+    "multi_intent": 13,
+    "out_of_scope": 4,
+    "unclear": 3
+  },
+  "sha256": {
+    "actions.json": "95ae3c66fc7f2b37d0c4706e4be7ebb51b6a7cc21a683d69da2c3deae0421d21",
+    "dev_utterances.json": "4623e6f590715ac0e2e2119b2c475d0408f2ab9a7fd3c05a0cabd03b0239751b",
+    "dialogs_sample.json": "55e1863f01044f1c34f36a5371e3dfd426f871d7d255217ab65500097d729428",
+    "knowledge_base.json": "83ec0bef18fc008ce3d94ae42ab7b198dfa5231ea4d6d6462c328f5c5fc4f293",
+    "mock_backend.json": "4a55ebf12f2b429488655c33793eb158e8980817d9aabb63fcd4227bf0f89dcf",
+    "scenarios.json": "5b317cd0d82ec66ff765b070619a2017f2d5fe0283a898a4eee9c4268489d010",
+    "slots.json": "2bd225784a23a4d8954c65913dbfc9307d4a94449494d79569d0a82c2c1bdbf3"
+  },
+  "validation": "passed",
+  "llm_accuracy": "not_measured"
+}
