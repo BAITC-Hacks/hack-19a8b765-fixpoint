@@ -20,7 +20,7 @@ python -m venv .venv
 в LLM, распознаватель речи или синтезатор.
 
 Для публикации выберите этот GitHub-репозиторий в
-[Streamlit Community Cloud](https://share.streamlit.io/), укажите ветку `main`
+[Streamlit Community Cloud](https://share.streamlit.io/), укажите ветку `codex/streamlit-cloud`
 и файл `streamlit_app.py`. В настройках приложения добавьте `OPENAI_API_KEY` в
 Secrets. Ключ нужен для LLM, STT и TTS; храните его только в Secrets сервиса или
 локальном `.env`, никогда не добавляйте в Git. После публикации Community Cloud
