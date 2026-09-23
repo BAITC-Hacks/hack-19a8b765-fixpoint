@@ -3,6 +3,7 @@ import type { Language } from './types';
 import { useMicrophone } from './hooks/useMicrophone';
 import { useSession } from './hooks/useSession';
 import TracePanel from './components/TracePanel';
+import DesignPreview from './components/DesignPreview';
 
 function MicIcon({ stop = false }: { stop?: boolean }) {
   return <svg viewBox="0 0 24 24" width="22" height="22" fill="none" aria-hidden="true">{stop
@@ -12,6 +13,7 @@ function MicIcon({ stop = false }: { stop?: boolean }) {
 
 export default function App() {
   const session = useSession();
+  const [preview, setPreview] = useState(false);
   const [draft, setDraft] = useState('');
   const [language, setLanguage] = useState<Language>('ru');
   const [speaking, setSpeaking] = useState(false);
@@ -50,9 +52,11 @@ export default function App() {
   function reset() { mic.abort(); mic.clearError(); stopSound(); setAudioError(''); setDraft(''); session.reset(); }
   const status = mic.phase === 'starting' ? 'Ожидаю доступ к микрофону…' : mic.phase === 'listening' ? 'Слушаю вас…' : mic.phase === 'stopping' ? 'Завершаю распознавание…' : speaking ? 'Воспроизвожу ответ' : session.busy ? 'Обрабатываю сообщение…' : connecting ? 'Подключаюсь…' : session.closed ? 'Разговор завершён' : 'Можно говорить или написать';
 
+  if (preview) return <DesignPreview onExit={() => setPreview(false)} />;
+
   return <div className="app">
     <header className="header"><a className="brand" href="/" aria-label="Saqta — главная"><span className="brand-symbol" aria-hidden="true">s.</span><span>Saqta<span className="brand-caption">Голосовой помощник</span></span></a>
-      <button className="new-chat" onClick={reset} disabled={session.busy || connecting}><span aria-hidden="true">＋</span> Новый разговор</button>
+      <div className="header-actions"><button onClick={() => { mic.abort(); stopSound(); setPreview(true); }} disabled={session.busy || connecting}>Предпросмотр дизайна</button><button className="new-chat" onClick={reset} disabled={session.busy || connecting}><span aria-hidden="true">＋</span> Новый разговор</button></div>
     </header>
     <main>
       <div className="page-heading"><div><p className="eyebrow">SAQTA INSURANCE</p><h1>Давайте поговорим</h1><p className="muted">На русском или қазақша. Голосом или текстом.</p></div><span className="demo-label">Тестовая среда</span></div>
@@ -67,6 +71,7 @@ export default function App() {
         <div className="controls">
           {(mic.error || session.error || audioError) && <div className="error" role="alert">{mic.error || session.error || audioError}</div>}
           <div className="voice-status" role="status"><span className={mic.phase === 'listening' ? 'recording-dot' : 'idle-dot'} />{status}</div>
+          {session.closed ? <div className="conversation-ended"><p>История доступна выше. Для следующего вопроса начните новый разговор.</p><button className="primary" onClick={reset}>Начать новый разговор</button></div> : <>
           <div className="voice-controls">
             <label className="language">Язык речи<select value={language} onChange={e => setLanguage(e.target.value as Language)} disabled={listening || blocked || speaking}><option value="ru">Русский</option><option value="kk">Қазақша</option></select></label>
             <button className={`primary microphone ${listening ? 'recording' : ''}`} onClick={() => { if (listening) mic.stop(); else { stopSound(); mic.start(language); } }} disabled={blocked || !mic.supported || mic.phase === 'stopping'} aria-pressed={listening}><MicIcon stop={listening} />{listening ? 'Завершить реплику' : 'Начать говорить'}</button>
@@ -75,6 +80,7 @@ export default function App() {
           {!mic.supported && <p className="notice">Этот браузер не поддерживает распознавание. Откройте в Chrome или введите текст.</p>}
           <form className="composer" onSubmit={e => { e.preventDefault(); send(); }}><label className="sr-only" htmlFor="message">Ваше сообщение</label><textarea id="message" ref={input} value={draft} maxLength={4000} disabled={blocked || listening || speaking} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); } }} placeholder="Введите сообщение…" rows={2} /><button className="send" type="submit" disabled={!draft.trim() || blocked || listening || speaking} aria-label="Отправить сообщение"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" aria-hidden="true"><path d="m5 12 7-7 7 7M12 5v15" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg></button></form>
           <p className="input-help">Enter — отправить · Shift + Enter — новая строка</p>
+          </>}
         </div>
       </section>
       <div className="integration"><p>{session.connection === 'online' ? 'Операции выполняются в тестовых данных.' : 'Распознавание можно проверить сейчас. Для ответов помощника нужен сервер.'}</p>{session.connection !== 'online' && <button className="text-button" disabled={connecting || listening || session.busy} onClick={() => { stopSound(); void session.connect(); }}>{connecting ? 'Подключение…' : 'Подключить сервер'}</button>}</div>
