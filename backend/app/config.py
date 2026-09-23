@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     mock_mode: bool = False
     request_timeout: float = 35
     data_dir: Path = ROOT / 'case' / 'voice_router_dataset'
+    session_archive_dir: Path = ROOT / 'runtime' / 'sessions'
     allowed_origins: str = 'http://localhost:3000,http://localhost:4173,http://127.0.0.1:4173,http://localhost:5173,http://localhost:8000,http://127.0.0.1:5173,http://127.0.0.1:8000'
 
     @property

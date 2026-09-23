@@ -6,7 +6,13 @@ from .slots import validate_slots
 from ..services.actions import ActionError
 
 YES = {'да', 'да подтверждаю', 'подтверждаю', 'согласен', 'согласна', 'иә', 'растаймын', 'иә растаймын'}
-NO = {'нет', 'не подтверждаю', 'отмена', 'жоқ', 'бас тартамын'}
+NO = {'нет', 'не подтверждаю', 'я не подтверждаю', 'не согласен', 'не согласна',
+      'я не согласен', 'я не согласна', 'отмена', 'жоқ', 'бас тартамын'}
+CLOSING = {'всё хорошо спасибо', 'все хорошо спасибо', 'спасибо до свидания',
+           'до свидания', 'пока', 'рақмет сау болыңыз', 'рахмет сау болыңыз', 'сау болыңыз'}
+
+def closing_reply(text):
+    return re.sub(r'[^\w\s]', '', text.lower()).strip() in CLOSING
 
 def explicit_reply(text):
     value = re.sub(r'[^\w\s]', '', text.lower()).strip()
@@ -49,6 +55,11 @@ class Executor:
             return out
         if top.confidence < .75:
             out.update(status='clarify', question=decision.clarification, instruction='Задай один уточняющий вопрос между двумя ближайшими сценариями. Ничего не выполняй.')
+            return out
+        if (state.active and state.active.done and not (state.queue or state.suspended)
+                and decision.is_continuation and top.scenario_id == state.active.scenario_id):
+            out.update(status='completed', question=('Этот запрос уже обработан. Чем ещё помочь?'
+                       if lang == 'ru' else 'Бұл сұрау өңделді. Тағы қалай көмектесе аламын?'))
             return out
         if decision.resume_previous and state.suspended:
             if state.active and not state.active.done:
@@ -182,10 +193,15 @@ class Executor:
                     return out
                 if action == 'transfer_to_operator' and decision.needs_operator:
                     args['queue'] = (spec['handoff'] or {}).get('queue','operator_general')
-                result = self.backend.run(action, args, confirmed=confirmed, operation_id=f.pending['operation_id'] if confirmed else None)
+                operation_id = f.pending['operation_id'] if confirmed and action == f.pending['action'] else None
+                result = self.backend.run(action, args, confirmed=confirmed, operation_id=operation_id)
                 f.completed_actions[action] = result
                 out['actions'].append({'name': action, 'mode': 'execute', 'result': result})
                 out['facts'][action] = result
+                if action == 'transfer_to_operator':
+                    f.done = True
+                    out['status'] = 'handoff'
+                    return out
                 if action == 'get_policy' and f.scenario_id == 'SC12':
                     s['policy_number'] = result['policy_number']
                 if action == 'check_payment' and any(not p.get('policy_number') for p in result['payments']):

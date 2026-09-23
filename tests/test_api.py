@@ -29,7 +29,8 @@ def test_mock_api_session_and_voice_error(monkeypatch):
         assert client.post('/api/turn',json={'session_id':sid,'audio_base64':'###','speak':False}).json()['events'][0]['event']=='error'
         assert client.get('/api/sessions/'+sid).json()['state']['active_scenario']=='SC33'
         assert client.delete('/api/sessions/'+sid).status_code==200
-        assert client.get('/api/sessions/'+sid).status_code==404
+        assert client.get('/api/sessions/'+sid).json()['status']=='closed'
+        assert client.post('/api/turn',json=payload).status_code==409
 
 def test_websocket_protocol(monkeypatch):
     monkeypatch.setattr(settings,'mock_mode',True)

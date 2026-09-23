@@ -28,7 +28,9 @@ export function useSession() {
     pending.current = false;
     const old = socket.current; socket.current = null; old?.close();
     const id = session.current; session.current = null;
-    if (id) void fetch(`/api/sessions/${encodeURIComponent(id)}`, { method: 'DELETE', keepalive: true }).catch(() => {});
+    if (id) void fetch(`/api/sessions/${encodeURIComponent(id)}/close`, { method: 'POST', keepalive: true })
+      .then(response => { if (!response.ok) throw new Error('archive'); })
+      .catch(() => dispatch({ type: 'error', error: 'Не удалось подтвердить закрытие сессии. Проверьте сохранённые разговоры в диагностике.' }));
   }
   useEffect(() => () => disconnect(), []);
 

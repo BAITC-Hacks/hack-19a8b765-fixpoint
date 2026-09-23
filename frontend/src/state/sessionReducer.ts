@@ -1,6 +1,6 @@
 import type { Message, ServerEvent, Trace } from '../types.ts';
-export type State = { messages: Message[]; traces: Trace[]; busy: boolean; closed: boolean; lastEvent: number; error: string };
-export const initialState: State = { messages: [], traces: [], busy: false, closed: false, lastEvent: -1, error: '' };
+export type State = { messages: Message[]; traces: Trace[]; busy: boolean; closed: boolean; lastEvent: number; error: string; waitingSlot: string | null };
+export const initialState: State = { messages: [], traces: [], busy: false, closed: false, lastEvent: -1, error: '', waitingSlot: null };
 type Action = { type: 'reset' } | { type: 'error'; error: string } | { type: 'user'; message: Message } | { type: 'event'; event: ServerEvent };
 export function sessionReducer(state: State, action: Action): State {
   if (action.type === 'reset') return initialState;
@@ -19,6 +19,12 @@ export function sessionReducer(state: State, action: Action): State {
   if (event.type === 'assistant.text' && typeof event.payload.text === 'string') {
     const message: Message = { id: `assistant-${event.turn_id ?? event.event_id}`, role: 'assistant', text: event.payload.text, language: typeof event.payload.language === 'string' ? event.payload.language : undefined };
     next.messages = [...state.messages.filter(m => m.id !== message.id), message];
+  }
+  if (event.type === 'turn.status' && event.payload.event === 'execution_trace') {
+    const context = event.payload.context;
+    if (context && typeof context === 'object' && 'waiting_slot' in context) {
+      next.waitingSlot = typeof context.waiting_slot === 'string' ? context.waiting_slot : null;
+    }
   }
   if (event.type === 'trace.updated') {
     const trace = event.payload as unknown as Trace;

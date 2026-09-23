@@ -6,6 +6,8 @@ services:
     env_file:
       - path: .env
         required: false
+    volumes:
+      - ./runtime/sessions:/app/runtime/sessions
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
       interval: 5s

@@ -17,7 +17,10 @@ async def transcribe(audio, mime, language, llm):
         response = await llm.client.audio.transcriptions.create(
             model=settings.stt_model,
             file=(f'recording.{ext}', audio, mime),
-            prompt='Страховая компания Saqta Insurance. Русская и казахская речь, ОГПО, КАСКО, ИИН.',
+            prompt=('Разговор со страховой компанией Saqta Insurance на русском или казахском языке. '
+                    'ИИН или ЖСН — 12 цифр. Записывай продиктованные цифры по порядку арабскими цифрами. '
+                    'Не добавляй цифры, которых не слышно.'),
+            extra_body={'keywords': ['ИИН', 'ЖСН', 'ОГПО', 'КАСКО'], 'languages': ['ru', 'kk']},
         )
         text = response.text.strip()
         if not text:

@@ -213,6 +213,8 @@ class MockBackend:
         if name == 'create_claim':
             lookup = {k:v for k,v in s.items() if k != 'client_id'} if s.get('culprit_vehicle_plate') else s
             policy = self.policy(lookup) if s.get('policy_number') else None
+            if policy and policy['product'] != s['product_type']:
+                fail('not_covered', 'Тип полиса не соответствует заявленному страховому случаю.')
             if policy and not policy['start_date'] <= s['incident_date'] <= policy['end_date']:
                 fail('policy_inactive', 'Полис не действовал на дату происшествия.')
             number = self.new_id('CL-', 'claims', 'claim_number')

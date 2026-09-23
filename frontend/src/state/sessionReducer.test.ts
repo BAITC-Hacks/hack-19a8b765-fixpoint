@@ -30,3 +30,14 @@ test('audio transcript and answer share one server turn without duplicates', () 
   assert.equal(sessionReducer(state, answer).messages.length, 2);
   assert.equal(state.messages[1].language, 'ru');
 });
+
+test('next recording gets the awaited identifier slot and clears it after completion', () => {
+  const awaiting = sessionReducer(initialState, { type: 'event', event: {
+    type: 'turn.status', event_id: 1, payload: { event: 'execution_trace', context: { waiting_slot: 'drivers_iin' } },
+  } });
+  assert.equal(awaiting.waitingSlot, 'drivers_iin');
+  const completed = sessionReducer(awaiting, { type: 'event', event: {
+    type: 'turn.status', event_id: 2, payload: { event: 'execution_trace', context: { waiting_slot: null } },
+  } });
+  assert.equal(completed.waitingSlot, null);
+});

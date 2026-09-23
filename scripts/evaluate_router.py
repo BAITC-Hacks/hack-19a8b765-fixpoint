@@ -45,7 +45,7 @@ async def main(args):
     if args.limit:
         print('Partial smoke run only; full-set accuracy is not computed.')
         return
-    result=subprocess.run([sys.executable,str(settings.data_dir/'evaluate.py'),str(p),str(settings.data_dir/'dev_utterances.json')],capture_output=True,text=True,encoding='utf-8')
+    result=subprocess.run([sys.executable,'-X','utf8',str(settings.data_dir/'evaluate.py'),str(p),str(settings.data_dir/'dev_utterances.json')],capture_output=True,text=True,encoding='utf-8')
     print(result.stdout)
     (out/'evaluation.txt').write_text(result.stdout+result.stderr,encoding='utf-8')
     if result.returncode:

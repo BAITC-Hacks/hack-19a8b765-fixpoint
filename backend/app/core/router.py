@@ -1,4 +1,5 @@
 import json
+from .identifiers import IIN_MARKER, PHONE_MARKER, extract_iins, extract_phones
 from .models import RoutingDecision, Candidate, WireRoutingDecision
 from ..services.llm import ProviderError
 
@@ -74,4 +75,47 @@ class Router:
         seen = set()
         d.scenarios = [c for c in d.scenarios if not (c.scenario_id in seen or seen.add(c.scenario_id))]
         d.scenarios.sort(key=lambda c: self.catalog.scenarios.get(c.scenario_id, {}).get('priority') != 'urgent')
+        if (d.is_continuation and state.active and d.scenarios
+                and d.scenarios[0].scenario_id == state.active.scenario_id):
+            d.scenarios = [d.scenarios[0], *(c for c in d.scenarios[1:] if c.scenario_id != 'SYS_UNCLEAR')]
+        if not d.reason.strip() and d.scenarios:
+            d.reason = d.scenarios[0].reason
+        waiting = state.active.waiting_slot if state.active else None
+        iin_slots = ('drivers_iin', 'new_driver_iin', 'iin')
+        if waiting in iin_slots or IIN_MARKER.search(text):
+            numbers = extract_iins(text)
+            # The transcript, not the model, is the evidence for an identifier.
+            # Remove a guessed IIN if speech contains no complete 12-digit run.
+            d.slots.pop('iin', None)
+            for candidate in d.scenarios:
+                required = self.catalog.scenarios.get(candidate.scenario_id, {}).get('slots', {}).get('required', [])
+                target = (waiting if state.active and candidate.scenario_id == state.active.scenario_id
+                          and waiting in iin_slots else next((key for key in iin_slots if key in required), None))
+                if not target:
+                    continue
+                for key in iin_slots:
+                    candidate.slots.pop(key, None)
+                if target == 'drivers_iin' and numbers:
+                    candidate.slots[target] = numbers
+                elif target != 'drivers_iin' and len(numbers) == 1:
+                    candidate.slots[target] = numbers[0]
+        phone_claimed = (waiting == 'phone' or PHONE_MARKER.search(text)
+                         or 'phone' in d.slots
+                         or any('phone' in c.slots for c in d.scenarios + d.alternatives))
+        if phone_claimed:
+            phones = extract_phones(text)
+            had_shared = 'phone' in d.slots
+            targets = [c for c in d.scenarios if (
+                'phone' in c.slots
+                or (waiting == 'phone' and state.active and c.scenario_id == state.active.scenario_id)
+                or (PHONE_MARKER.search(text) and 'phone' in self.catalog.scenarios.get(c.scenario_id, {}).get('slots', {}).get('required', []))
+            )]
+            d.slots.pop('phone', None)
+            for candidate in d.scenarios + d.alternatives:
+                candidate.slots.pop('phone', None)
+            if len(phones) == 1:
+                if had_shared or not targets:
+                    d.slots['phone'] = phones[0]
+                for candidate in targets:
+                    candidate.slots['phone'] = phones[0]
         return d

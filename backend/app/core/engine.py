@@ -1,6 +1,6 @@
 import base64
 from .context import Dialogue
-from .executor import Executor, explicit_reply
+from .executor import Executor, closing_reply, explicit_reply
 from .fast_answers import factual_answer
 from .latency import LatencyTracker
 from .models import RoutingDecision, Candidate, Answer
@@ -47,7 +47,11 @@ class Engine:
             f = state.active
             reply = explicit_reply(text)
             # Confirmation only for the exact pending operation; ordinary yes cannot mutate data.
-            if f and f.done and reply and not (state.queue or state.suspended):
+            if f and f.done and not (state.queue or state.suspended) and closing_reply(text):
+                decision = RoutingDecision(scenarios=[Candidate(scenario_id='SYS_GOODBYE', confidence=1, reason='Клиент завершил разговор после выполненного запроса.')],
+                    language=state.language, response_language=state.language,
+                    reason='Клиент завершил разговор после выполненного запроса.')
+            elif f and f.done and reply and not (state.queue or state.suspended):
                 decision = RoutingDecision(scenarios=[Candidate(scenario_id='SYS_UNCLEAR', confidence=.8, reason='Ожидающей операции нет.')],
                     language=state.language, response_language=state.language, reason='Повторное подтверждение не выполняет действие.',
                     clarification='Операция уже обработана. Чем ещё помочь?' if state.language == 'ru' else 'Операция өңделді. Тағы қалай көмектесе аламын?')
