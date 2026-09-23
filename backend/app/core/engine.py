@@ -78,7 +78,7 @@ class Engine:
         state.history.append({'role':'user','content':text})
         with clock.stage('response_ms'):
             if self.llm.settings.provider == 'mock':
-                answer = result.get('question') or ('Демонстрационный режим. Подключите Groq для ответов по результатам обработки.' if state.language == 'ru' else 'Демо режимі. Жауап беру үшін Groq қосыңыз.')
+                answer = result.get('question') or ('Демонстрационный режим: подключите API-ключ LLM-провайдера для ответов.' if state.language == 'ru' else 'Демо режимі: жауап алу үшін LLM провайдерінің API кілтін қосыңыз.')
             elif result.get('question') and not result.get('facts') and not state.queue:
                 answer = result['question']
             else:

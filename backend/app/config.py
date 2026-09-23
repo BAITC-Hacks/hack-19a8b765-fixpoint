@@ -23,7 +23,7 @@ class Settings(BaseSettings):
         if self.llm_provider != 'auto':
             key = self.groq_api_key if self.llm_provider == 'groq' else self.openai_api_key
             return self.llm_provider if key else 'mock'
-        return 'groq' if self.groq_api_key else 'openai' if self.openai_api_key else 'mock'
+        return 'openai' if self.openai_api_key else 'groq' if self.groq_api_key else 'mock'
 
     @property
     def key(self):

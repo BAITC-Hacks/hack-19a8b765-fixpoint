@@ -25,12 +25,14 @@ class MockBackend:
         self.bookings = set()
 
     def identify(self, slots):
-        for c in self.data['clients']:
-            if any(slots.get(k) == c[k] for k in ['phone', 'iin']):
-                return copy.deepcopy(c)
+        owners = {c['client_id'] for c in self.data['clients']
+                  if any(slots.get(k) == c[k] for k in ('phone','iin'))}
         policy = next((p for p in self.data['policies'] if p['policy_number'] == slots.get('policy_number')), None)
         claim = next((c for c in self.data['claims'] if c['claim_number'] == slots.get('claim_number')), None)
-        owner = (policy or claim or {}).get('client_id')
+        owners.update(x['client_id'] for x in (policy, claim) if x and x.get('client_id'))
+        if len(owners) > 1:
+            fail('invalid_input', 'Идентификаторы относятся к разным клиентам. Уточните данные заявителя.')
+        owner = next(iter(owners), None)
         return next((copy.deepcopy(c) for c in self.data['clients'] if c['client_id'] == owner), None)
 
     def policy(self, s, active=False):
@@ -217,7 +219,7 @@ class MockBackend:
                 fail('policy_inactive', 'Полис не действовал на дату происшествия.')
             number = self.new_id('CL-', 'claims', 'claim_number')
             claim = {'claim_number': number, 'client_id': s.get('client_id'), 'policy_number': policy['policy_number'] if policy else None,
-                     'claim_type': s['product_type'], 'incident_date': s['incident_date'], 'status': 'registered',
+                     'claim_type': 'ogpo_victim' if s.get('culprit_vehicle_plate') else s['product_type'], 'incident_date': s['incident_date'], 'status': 'registered',
                      'description': s['incident_description'], 'next_step': self.kb['claims']['submission']}
             self.data['claims'].append(claim)
             return copy.deepcopy(claim)

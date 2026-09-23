@@ -19,6 +19,7 @@ class RoutingDecision(BaseModel):
     is_topic_switch: bool = False
     resume_previous: bool = False
     needs_operator: bool = False
+    confirmation: Literal['yes', 'no'] | None = None
     reason: str
     clarification: str = ''
 

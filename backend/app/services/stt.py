@@ -2,7 +2,7 @@ from .llm import ProviderError
 
 async def transcribe(audio, mime, language, llm):
     if llm.settings.provider == 'mock' or not llm.settings.key:
-        raise ProviderError('Для распознавания голоса добавьте GROQ_API_KEY в .env. Пока доступен текстовый ввод и ручная демонстрация.')
+        raise ProviderError('Для распознавания речи добавьте API-ключ выбранного провайдера в .env. Пока доступны текстовый ввод и ручная демонстрация.')
     formats = {'audio/wav':'wav','audio/x-wav':'wav','audio/webm':'webm','audio/ogg':'ogg','audio/mp4':'m4a','audio/mpeg':'mp3'}
     ext = formats.get(mime.split(';')[0])
     if not ext:

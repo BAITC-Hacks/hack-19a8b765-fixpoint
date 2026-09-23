@@ -21,6 +21,10 @@ Confidence is an estimate, not a calibrated probability. Explain in one short ev
 for a supervisor (not private chain-of-thought). If unclear, ask one short question between two
 plausible interpretations. needs_operator is true only for explicit request or catalog handoff condition
 supported by the utterance. Merely mentioning a possible condition is insufficient.
+confirmation is yes/no only for explicit consent/refusal to the CURRENT pending operation;
+never infer consent from polite acknowledgement, a conditional phrase or a question.
+When consent is combined with another question, include the pending scenario first and put the
+new request's slots in its own candidate. Urgent requests still come first and interrupt consent.
 Do not execute actions or promise success. Routing is your only responsibility.'''
 
 class Router:

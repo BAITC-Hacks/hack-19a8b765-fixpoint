@@ -26,6 +26,9 @@ class Dialogue:
     language: str = 'ru'
     low_confidence: int = 0
     turn: int = 0
+    closed: bool = False
+    current_request: str = ''
+    requested_scenarios: list[str] = field(default_factory=list)
 
     def public(self):
         return {'history': list(self.history), 'active_scenario': self.active.scenario_id if self.active else None,
@@ -35,4 +38,5 @@ class Dialogue:
                 'pending_operation': self.active.pending if self.active else None,
                 'suspended': [f.scenario_id for f in self.suspended],
                 'queued': [f.scenario_id for f in self.queue], 'language': self.language,
-                'client_identified': self.client is not None}
+                'client_identified': self.client is not None, 'closed': self.closed,
+                'current_request':self.current_request, 'requested_scenarios':self.requested_scenarios}

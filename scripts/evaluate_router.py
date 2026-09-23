@@ -17,7 +17,7 @@ from app.services.llm import LLM, ProviderError
 
 async def main(args):
     if settings.provider=='mock' or not settings.key:
-        raise SystemExit('GROQ_API_KEY is missing. No mock accuracy will be reported.')
+        raise SystemExit('LLM provider key is missing. No mock accuracy will be reported.')
     catalog=Catalog(settings.data_dir)
     records=json.loads((settings.data_dir/'dev_utterances.json').read_text(encoding='utf-8'))['utterances']
     llm=LLM(settings)

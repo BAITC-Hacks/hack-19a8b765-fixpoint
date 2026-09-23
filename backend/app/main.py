@@ -78,6 +78,8 @@ async def execute_turn(req, key, entry, send=None):
                 for raw, wire in previous['emitted']:
                     await send(raw, wire)
             return previous['result']
+        if entry['engine'].state.closed:
+            raise HTTPException(409, 'Разговор завершён. Начните новую сессию.')
         if len(entry['requests']) >= 1000:
             raise HTTPException(409, 'Лимит ходов сессии достигнут. Начните новый разговор.')
         record = {'fingerprint':fingerprint, 'result':None, 'emitted':[]}
@@ -118,7 +120,7 @@ async def execute_turn(req, key, entry, send=None):
         await emit(None,wire_event(entry,'trace.updated',trace.model_dump(),turn_id))
         complete = next((e for e in events if e['event']=='turn_complete'),None)
         await emit(complete,wire_event(entry,'turn.completed',{
-            'closed':trace.status=='handoff' or any(s['scenario_id']=='SYS_GOODBYE' for s in trace.scenarios),
+            'closed':engine.state.closed,
             'status':trace.status},turn_id))
         for old in list(entry['requests'].values())[:-20]:
             old['result'],old['emitted'] = None,[]
@@ -199,6 +201,7 @@ async def voice(ws: WebSocket,session_id: str | None = None):
     ready = {'session_id':key,'provider':settings.provider}
     await ws.send_json(wire_event(entry,'session.ready',ready) if modern else {'event':'session_started',**ready})
     buffer = bytearray()
+    audio_invalid = False
     mime,language = 'audio/wav','auto'
     try:
         while True:
@@ -210,9 +213,12 @@ async def voice(ws: WebSocket,session_id: str | None = None):
                 break
             entry['at'] = monotonic()
             if message.get('bytes') is not None:
+                if audio_invalid:
+                    continue
                 buffer.extend(message['bytes'])
                 if len(buffer)>MAX_AUDIO:
                     buffer.clear()
+                    audio_invalid = True
                     await error('Запись превышает 12 МБ.')
                 continue
             try:
@@ -225,13 +231,27 @@ async def voice(ws: WebSocket,session_id: str | None = None):
                     raise ValueError('payload должен быть JSON-объектом.')
                 if event in ('audio.start','audio_start'):
                     buffer.clear()
+                    audio_invalid = False
                     mime,language = payload.get('mime','audio/wav'),payload.get('language','auto')
                 elif event in ('audio.chunk','audio_chunk'):
-                    buffer.extend(decode_audio(payload.get('data','')))
+                    if audio_invalid:
+                        continue
+                    try:
+                        chunk = decode_audio(payload.get('data',''))
+                    except ValueError:
+                        buffer.clear()
+                        audio_invalid = True
+                        raise
+                    buffer.extend(chunk)
                     if len(buffer)>MAX_AUDIO:
                         buffer.clear()
+                        audio_invalid = True
                         raise ValueError('Запись превышает 12 МБ.')
                 elif event in ('text.submit','text_input','audio.end','speech_end'):
+                    if event in ('audio.end','speech_end') and audio_invalid:
+                        buffer.clear()
+                        audio_invalid = False
+                        continue
                     audio = bytes(buffer) if event in ('audio.end','speech_end') else None
                     buffer.clear()
                     req = TurnRequest(session_id=key,request_id=data.get('request_id') or str(uuid4()),
