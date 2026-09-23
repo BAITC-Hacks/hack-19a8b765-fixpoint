@@ -3,7 +3,8 @@ from types import SimpleNamespace
 
 from app.core.context import Dialogue, Frame
 from app.core.executor import Executor
-from app.core.identifiers import extract_iins
+from app.core.identifiers import (extract_claim_numbers, extract_iins,
+                                  extract_plates, extract_policy_numbers)
 from app.core.models import Candidate, RoutingDecision
 from app.core.router import Router
 
@@ -24,6 +25,69 @@ def test_ru_kk_digit_words_and_digit_groups():
 def test_missing_digit_is_never_padded_and_two_drivers_remain_separate():
     assert extract_iins('ИИН 91051230045') == []
     assert extract_iins('мой 910512300456 и супруги 930824400789') == ['910512300456', '930824400789']
+
+
+def test_spoken_and_written_vehicle_plates():
+    assert extract_plates('Четыреста восемьдесят два КМА ноль два.') == ['482KMA02']
+    assert extract_plates('482KMA02') == ['482KMA02']
+    assert extract_plates('Номер 482 К М А 02') == ['482KMA02']
+    assert extract_plates('Номер 482 ка эм а 02') == ['482KMA02']
+    assert extract_plates('Номер 482 KM A 02') == ['482KMA02']
+    assert extract_plates('Госномер 777 АВС 02') == ['777ABC02']
+    assert extract_plates('Көліктің нөмірі төрт жүз сексен екі KMA нөл екі') == ['482KMA02']
+    assert extract_plates('482 КМА ноль') == []
+    assert extract_plates('482 K ман 02') == []
+
+
+def test_waiting_plate_uses_transcript_over_model_guess(catalog):
+    state = Dialogue(active=Frame('SC02', waiting_slot='vehicle_plate'))
+    route = Router(catalog, StubLLM('SC02', {'vehicle_plate': '777ABC02'}))
+    decision = asyncio.run(route.route('Четыреста восемьдесят два КМА ноль два.', state))
+    assert decision.scenarios[0].slots['vehicle_plate'] == '482KMA02'
+
+
+def test_incomplete_plate_cannot_be_repaired_by_model(catalog):
+    state = Dialogue(active=Frame('SC02', waiting_slot='vehicle_plate'))
+    route = Router(catalog, StubLLM('SC02', {'vehicle_plate': '482KMA02'}))
+    decision = asyncio.run(route.route('Четыреста восемьдесят два КМА ноль.', state))
+    assert 'vehicle_plate' not in decision.scenarios[0].slots
+
+
+def test_culprit_plate_keeps_its_distinct_role(catalog):
+    state = Dialogue(active=Frame('SC12', waiting_slot='culprit_vehicle_plate'))
+    route = Router(catalog, StubLLM('SC12', {'culprit_vehicle_plate': '777ABC02'}))
+    decision = asyncio.run(route.route('Госномер виновника 482 КМА 02', state))
+    assert decision.scenarios[0].slots == {'culprit_vehicle_plate': '482KMA02'}
+
+
+def test_spoken_policy_and_claim_references_are_complete():
+    assert extract_policy_numbers('Полис SQ-OGPO-104501') == ['SQ-OGPO-104501']
+    assert extract_policy_numbers('Полис эс кью огпо один ноль четыре пять ноль один') == ['SQ-OGPO-104501']
+    assert extract_policy_numbers('Полис S Q ОГПО один ноль четыре пять ноль один') == ['SQ-OGPO-104501']
+    assert extract_policy_numbers('Полис S Q O G P O один ноль четыре пять ноль один') == ['SQ-OGPO-104501']
+    assert extract_policy_numbers('Полис эс кью о гэ пэ о один ноль четыре пять ноль один') == ['SQ-OGPO-104501']
+    assert extract_policy_numbers('Полис SQ OGP O один ноль четыре пять ноль один') == ['SQ-OGPO-104501']
+    assert extract_policy_numbers('Полис SQ-OGPO-10450') == []
+    assert extract_policy_numbers('Полис SQ ОГПА 104501') == []
+    assert extract_claim_numbers('Заявление CL-500287') == ['CL-500287']
+    assert extract_claim_numbers('Заявление си эл пять ноль ноль два восемь семь') == ['CL-500287']
+    assert extract_claim_numbers('Заявление C L пять ноль ноль два восемь семь') == ['CL-500287']
+    assert extract_claim_numbers('Номер заявления 500287', allow_bare=True) == ['CL-500287']
+    assert extract_claim_numbers('Номер заявления 50028', allow_bare=True) == []
+
+
+def test_waiting_claim_cannot_accept_a_guessed_final_digit(catalog):
+    state = Dialogue(active=Frame('SC17', waiting_slot='claim_number'))
+    route = Router(catalog, StubLLM('SC17', {'claim_number': 'CL-500287'}))
+    decision = asyncio.run(route.route('Номер заявления пять ноль ноль два восемь', state))
+    assert 'claim_number' not in decision.scenarios[0].slots
+
+
+def test_waiting_policy_uses_spelled_prefix_and_product(catalog):
+    state = Dialogue(active=Frame('SC04', waiting_slot='policy_number'))
+    route = Router(catalog, StubLLM('SC04', {'policy_number': 'SQ-OGPO-104502'}))
+    decision = asyncio.run(route.route('Полис S Q O G P O один ноль четыре пять ноль один', state))
+    assert decision.scenarios[0].slots['policy_number'] == 'SQ-OGPO-104501'
 
 
 class StubLLM:

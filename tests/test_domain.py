@@ -63,7 +63,7 @@ def test_quote_to_purchase_preserves_related_parameters(catalog,backend):
     executor.process(decision('SC01',{'region':'almaty','vehicle_type':'car','drivers_iin':['000000000000']}),state,'quote')
     result=executor.process(decision('SC02'),state,'buy')
     assert state.active.slots['drivers_iin']==['000000000000']
-    assert result['question']==catalog.slots['vehicle_plate']['prompt']['ru']
+    assert 'госномер' in result['question'] and 'буквы' in result['question']
 
 def test_changed_parameters_require_fresh_confirmation(catalog,backend):
     e,state=Executor(catalog,backend),Dialogue()

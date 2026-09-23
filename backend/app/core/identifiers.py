@@ -1,4 +1,4 @@
-"""Conservative extraction of spoken 12-digit IIN/ЖСН identifiers.
+"""Conservative extraction of spoken identifiers from RU/KK transcripts.
 
 Only complete sequences are returned. This does not repair missing or uncertain
 digits and is deliberately limited to common RU/KK number words.
@@ -40,6 +40,33 @@ TOKEN = re.compile(r'[0-9]+|[а-яёәғқңөұүһі]+', re.IGNORECASE)
 IIN_MARKER = re.compile(r'\b(?:иин|жсн|iin|zhsn)\b', re.IGNORECASE)
 PHONE_MARKER = re.compile(r'\b(?:телефон\w*|нөмір\w*|номер телефона|phone)\b', re.IGNORECASE)
 PLUS_MARKER = re.compile(r'\+|\b(?:плюс|plus)\b', re.IGNORECASE)
+PLATE_MARKER = re.compile(
+    r'\b(?:госномер\w*|номер\s+(?:машин\w*|автомобил\w*)|'
+    r'көлік\w*\s+нөмір\w*|мемлекеттік\s+нөмір\w*)\b', re.IGNORECASE,
+)
+POLICY_MARKER = re.compile(r'\b(?:полис\w*|сақтандыру\s+полис\w*)\b', re.IGNORECASE)
+CLAIM_MARKER = re.compile(r'\b(?:заявлени\w*|обращени\w*|страхов\w*\s+случа\w*|өтініш\w*)\b', re.IGNORECASE)
+PLATE_TOKEN = re.compile(r'[0-9]+|[a-z]+|[а-яёәғқңөұүһі]+', re.IGNORECASE)
+CYRILLIC_PLATE_LETTERS = {
+    'А': 'A', 'В': 'B', 'Е': 'E', 'К': 'K', 'М': 'M', 'Н': 'H',
+    'О': 'O', 'Р': 'P', 'С': 'C', 'Т': 'T', 'У': 'Y', 'Х': 'X',
+    'Б': 'B', 'Г': 'G', 'Д': 'D', 'З': 'Z', 'И': 'I', 'Л': 'L',
+    'П': 'P', 'Ф': 'F',
+}
+SPOKEN_PLATE_LETTERS = {
+    'ка': 'K', 'кэ': 'K', 'эм': 'M', 'а': 'A', 'бэ': 'B',
+    'вэ': 'V', 'гэ': 'G', 'дэ': 'D', 'е': 'E', 'же': 'J',
+    'зэ': 'Z', 'и': 'I', 'эль': 'L', 'эн': 'N', 'о': 'O',
+    'пэ': 'P', 'эр': 'R', 'эс': 'S', 'тэ': 'T', 'у': 'U',
+    'эф': 'F', 'ха': 'H', 'икс': 'X', 'зет': 'Z',
+}
+POLICY_PRODUCTS = {
+    'ogpo': 'OGPO', 'огпо': 'OGPO',
+    'casco': 'CASCO', 'каско': 'CASCO',
+    'trvl': 'TRVL', 'travel': 'TRVL', 'тревел': 'TRVL',
+    'prop': 'PROP', 'ns': 'NS', 'нс': 'NS',
+    'dms': 'DMS', 'дмс': 'DMS',
+}
 
 
 def _digits(words):
@@ -122,4 +149,127 @@ def extract_phones(text):
             continue
         if phone not in found:
             found.append(phone)
+    return found
+
+
+def _letter_piece(word):
+    spoken = SPOKEN_PLATE_LETTERS.get(word.lower())
+    if spoken:
+        return spoken
+    if word.isascii() and word.isalpha() and len(word) <= 5:
+        return word.upper()
+    token = word.upper()
+    if len(token) <= 5 and all(char in CYRILLIC_PLATE_LETTERS for char in token):
+        return ''.join(CYRILLIC_PLATE_LETTERS[char] for char in token)
+    return None
+
+
+def _plate_codes(tokens, start):
+    codes = []
+    code = ''
+    for index in range(start, min(start + 3, len(tokens))):
+        piece = _letter_piece(tokens[index])
+        if piece is None or len(code + piece) > 3:
+            break
+        code += piece
+        if len(code) >= 2:
+            codes.append((code, index + 1))
+    return codes
+
+
+def extract_plates(text):
+    """Return complete plates only when all three parts appear in the transcript."""
+    tokens = PLATE_TOKEN.findall(text.lower())
+    found = []
+    for start, word in enumerate(tokens):
+        if not (word.isdigit() or word in NUMERIC_WORDS):
+            continue
+        if start and (tokens[start - 1].isdigit() or tokens[start - 1] in NUMERIC_WORDS):
+            continue
+        end = start
+        while end < len(tokens) and (tokens[end].isdigit() or tokens[end] in NUMERIC_WORDS):
+            end += 1
+        prefix = _digits(tokens[start:end])
+        if len(prefix) != 3:
+            continue
+        for code, after_code in _plate_codes(tokens, end):
+            suffix_end = after_code
+            while suffix_end < len(tokens) and (tokens[suffix_end].isdigit() or tokens[suffix_end] in NUMERIC_WORDS):
+                suffix_end += 1
+            suffix = _digits(tokens[after_code:suffix_end]) if suffix_end > after_code else ''
+            if len(suffix) == 2:
+                plate = prefix + code + suffix
+                if plate not in found:
+                    found.append(plate)
+    return found
+
+
+def _reference_digits(tokens, start):
+    end = start
+    while end < len(tokens) and (tokens[end].isdigit() or tokens[end] in NUMERIC_WORDS):
+        end += 1
+    return _digits(tokens[start:end]) if end > start else ''
+
+
+def _policy_product(tokens, start):
+    if start >= len(tokens):
+        return None, start
+    direct = POLICY_PRODUCTS.get(tokens[start])
+    if direct:
+        return direct, start + 1
+    code = ''
+    for width in range(1, 6):
+        if start + width > len(tokens):
+            break
+        piece = _letter_piece(tokens[start + width - 1])
+        if piece is None or len(code + piece) > 5:
+            break
+        code += piece
+        if code.lower() in POLICY_PRODUCTS:
+            return POLICY_PRODUCTS[code.lower()], start + width
+    return None, start
+
+
+def extract_policy_numbers(text):
+    """Require the SQ prefix, product, and all six policy digits."""
+    tokens = PLATE_TOKEN.findall(text.lower())
+    found = []
+    for index, token in enumerate(tokens):
+        if token == 'sq' or tokens[index:index + 2] == ['s', 'q']:
+            product_at = index + (1 if token == 'sq' else 2)
+        elif token == 'эс' and tokens[index + 1:index + 2] in (['кью'], ['ку']):
+            product_at = index + 2
+        else:
+            continue
+        product, number_at = _policy_product(tokens, product_at)
+        if not product:
+            continue
+        digits = _reference_digits(tokens, number_at)
+        if len(digits) == 6:
+            number = f'SQ-{product}-{digits}'
+            if number not in found:
+                found.append(number)
+    return found
+
+
+def extract_claim_numbers(text, *, allow_bare=False):
+    """Require six claim digits; CL may be supplied by the asked slot."""
+    tokens = PLATE_TOKEN.findall(text.lower())
+    found = []
+    for index, token in enumerate(tokens):
+        if token == 'cl' or tokens[index:index + 2] == ['c', 'l']:
+            number_at = index + (1 if token == 'cl' else 2)
+        elif token == 'си' and tokens[index + 1:index + 2] == ['эл']:
+            number_at = index + 2
+        else:
+            continue
+        digits = _reference_digits(tokens, number_at)
+        if len(digits) == 6:
+            number = 'CL-' + digits
+            if number not in found:
+                found.append(number)
+    if not found and allow_bare:
+        runs = [run for run in _numeric_runs(text) if len(run) == 6]
+        if len(runs) == 1:
+            found.append('CL-' + runs[0])
     return found

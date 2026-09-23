@@ -1,5 +1,7 @@
 import json
-from .identifiers import IIN_MARKER, PHONE_MARKER, extract_iins, extract_phones
+from .identifiers import (CLAIM_MARKER, IIN_MARKER, PHONE_MARKER, PLATE_MARKER, POLICY_MARKER,
+                          extract_claim_numbers, extract_iins, extract_phones,
+                          extract_plates, extract_policy_numbers)
 from .models import RoutingDecision, Candidate, WireRoutingDecision
 from ..services.llm import ProviderError
 
@@ -118,4 +120,60 @@ class Router:
                     d.slots['phone'] = phones[0]
                 for candidate in targets:
                     candidate.slots['phone'] = phones[0]
+        plate_slots = ('vehicle_plate', 'culprit_vehicle_plate')
+        plate_claimed = (waiting in plate_slots or PLATE_MARKER.search(text)
+                         or any(key in d.slots for key in plate_slots)
+                         or any(key in c.slots for c in d.scenarios + d.alternatives for key in plate_slots))
+        if plate_claimed:
+            plates = extract_plates(text)
+            shared = [key for key in plate_slots if key in d.slots]
+            targets = []
+            for candidate in d.scenarios:
+                required = self.catalog.scenarios.get(candidate.scenario_id, {}).get('slots', {}).get('required', [])
+                present = [key for key in plate_slots if key in candidate.slots]
+                required_plates = [key for key in plate_slots if key in required]
+                if waiting in plate_slots and state.active and candidate.scenario_id == state.active.scenario_id:
+                    targets.append((candidate, waiting))
+                elif len(present) == 1:
+                    targets.append((candidate, present[0]))
+                elif PLATE_MARKER.search(text) and len(required_plates) == 1:
+                    targets.append((candidate, required_plates[0]))
+            for key in plate_slots:
+                d.slots.pop(key, None)
+            for candidate in d.scenarios + d.alternatives:
+                for key in plate_slots:
+                    candidate.slots.pop(key, None)
+            if len(plates) == 1:
+                for key in shared:
+                    d.slots[key] = plates[0]
+                for candidate, key in targets:
+                    candidate.slots[key] = plates[0]
+        for key, marker, extractor in (
+            ('policy_number', POLICY_MARKER, extract_policy_numbers),
+            ('claim_number', CLAIM_MARKER, extract_claim_numbers),
+        ):
+            claimed = (waiting == key or marker.search(text) or key in d.slots
+                       or any(key in c.slots for c in d.scenarios + d.alternatives))
+            if not claimed:
+                continue
+            numbers = (extractor(text, allow_bare=bool(waiting == key or marker.search(text)))
+                       if key == 'claim_number' else extractor(text))
+            shared = key in d.slots
+            targets = []
+            for candidate in d.scenarios:
+                spec = self.catalog.scenarios.get(candidate.scenario_id, {})
+                scenario_slots = spec.get('slots', {})
+                expected = scenario_slots.get('required', []) + scenario_slots.get('optional', [])
+                if (key in candidate.slots
+                        or (waiting == key and state.active and candidate.scenario_id == state.active.scenario_id)
+                        or (marker.search(text) and key in expected)):
+                    targets.append(candidate)
+            d.slots.pop(key, None)
+            for candidate in d.scenarios + d.alternatives:
+                candidate.slots.pop(key, None)
+            if len(numbers) == 1:
+                if shared:
+                    d.slots[key] = numbers[0]
+                for candidate in targets:
+                    candidate.slots[key] = numbers[0]
         return d
