@@ -3,6 +3,11 @@ from typing import Any, Literal
 from uuid import uuid4
 from pydantic import BaseModel, Field
 
+class CaptureDiagnostics(BaseModel):
+    duration_ms: float = Field(ge=0, le=60000)
+    silence_ms: float = Field(ge=0, le=60000)
+    endpoint: Literal['silence', 'timeout']
+
 class TurnRequest(BaseModel):
     session_id: str | None = None
     request_id: str = Field(default_factory=lambda: str(uuid4()), min_length=1, max_length=100)
@@ -12,6 +17,7 @@ class TurnRequest(BaseModel):
     audio_base64: str | None = Field(default=None, max_length=17_000_000)
     mime: str = 'audio/wav'
     demo_scenario: str | None = None
+    capture: CaptureDiagnostics | None = None
 
 class TurnTrace(BaseModel):
     turn: int
@@ -29,6 +35,7 @@ class TurnTrace(BaseModel):
     status: str = 'error'
     mode: str
     errors: list[str] = Field(default_factory=list)
+    capture: CaptureDiagnostics | None = None
 
 class TurnResponse(BaseModel):
     session_id: str

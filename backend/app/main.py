@@ -140,7 +140,7 @@ async def execute_turn(req, key, entry, send=None):
         turn_id = f'turn-{engine.state.turn+1}'
         input_record = {'source':'audio' if req.audio_base64 else 'text', 'text':req.text,
                         'language':req.language, 'mime':req.mime if req.audio_base64 else None,
-                        'speak':req.speak}
+                        'speak':req.speak, 'capture':req.capture.model_dump() if req.capture else None}
         entry['archive']['in_progress'] = {'request_id':req.request_id, 'turn_id':turn_id,
                                            'started_at':timestamp(), 'input':input_record}
         try:
@@ -181,6 +181,7 @@ async def execute_turn(req, key, entry, send=None):
         # Rejected audio can fail before Engine increments the dialogue counter.
         engine.state.turn = max(engine.state.turn, int(turn_id.removeprefix('turn-')))
         trace = trace_from(events,engine)
+        trace.capture = req.capture if req.audio_base64 else None
         result = TurnResponse(session_id=key,request_id=req.request_id,turn_id=turn_id,
             text=next((e['text'] for e in events if e['event']=='assistant_response'),None),
             state=copy.deepcopy(engine.state.public()),trace=trace,events=events).model_dump()
@@ -354,7 +355,8 @@ async def voice(ws: WebSocket,session_id: str | None = None):
                     req = TurnRequest(session_id=key,request_id=data.get('request_id') or str(uuid4()),
                         text=payload.get('text',''),language=payload.get('language',language),mime=mime,
                         audio_base64=base64.b64encode(audio).decode() if audio else None,
-                        speak=payload.get('speak',False if modern else True))
+                        speak=payload.get('speak',False if modern else True),
+                        capture=payload.get('capture') if audio else None)
                     await execute_turn(req,key,entry,send)
                 elif event in ('playback.started','playback_started'):
                     ms = float(payload['ttfa_ms'])

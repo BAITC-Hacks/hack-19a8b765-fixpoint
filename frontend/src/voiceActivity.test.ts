@@ -38,6 +38,8 @@ test('only requested identifiers use the longer pause', () => {
   assert.equal(endOfSpeechForSlot('city'), END_OF_SPEECH_MS);
   assert.equal(endOfSpeechForSlot('drivers_iin'), IDENTIFIER_END_OF_SPEECH_MS);
   assert.equal(endOfSpeechForSlot('phone'), IDENTIFIER_END_OF_SPEECH_MS);
+  assert.equal(endOfSpeechForSlot('vehicle_plate'), IDENTIFIER_END_OF_SPEECH_MS);
+  assert.equal(endOfSpeechForSlot('culprit_vehicle_plate'), IDENTIFIER_END_OF_SPEECH_MS);
 });
 
 test('continuous ambient noise above the old threshold is not a turn', () => {
@@ -81,6 +83,36 @@ test('long speech does not become the background; quieter endings are retained',
   assert.equal(detector.noiseFloor, .002);
   feed(detector, 5020, 5300, .004);
   assert.equal(detector.lastVoiceAt, 5300);
+});
+
+test('a raised steady noise floor after speech ends the turn before the 30 second limit', () => {
+  for (const background of [.0025, .005, .015]) {
+    for (const variation of [0, .08]) {
+      const detector = new VoiceActivityDetector(0, .001);
+      feed(detector, 0, 300, .02);
+      let endedAt: number | null = null;
+      for (let at = 320; at <= 4000; at += 20) {
+        const rms = background * (1 + variation * Math.sin(at * .07));
+        if (detector.observe(rms, at)) { endedAt = at; break; }
+      }
+      assert.ok(endedAt !== null && endedAt < 3000,
+        `background ${background}, variation ${variation} ended at ${endedAt}`);
+    }
+  }
+});
+
+test('modulated quiet identifier speech is kept beyond the weak-tail timeout', () => {
+  const detector = new VoiceActivityDetector(0, .002, IDENTIFIER_END_OF_SPEECH_MS);
+  feed(detector, 0, 300, .05);
+  for (let at = 320; at <= 3500; at += 20) {
+    assert.equal(detector.observe(at % 80 < 40 ? .004 : .006, at), false);
+  }
+  assert.equal(detector.lastVoiceAt, 3500);
+  let endedAt: number | null = null;
+  for (let at = 3520; at <= 4600; at += 20) {
+    if (detector.observe(.001, at)) { endedAt = at; break; }
+  }
+  assert.equal(endedAt, 4500);
 });
 
 test('the ambient estimate follows gradual noise and gain changes', () => {

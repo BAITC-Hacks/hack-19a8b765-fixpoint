@@ -26,10 +26,10 @@ export default function App() {
   const audioUrl = useRef<string | null>(null);
   const lastAudioTurn = useRef('');
   const history = useRef<HTMLDivElement>(null);
-  const mic = useMicrophone((blob, endedAt) => {
+  const mic = useMicrophone((blob, endedAt, capture) => {
     if (!activeRef.current) return;
     setPhase('processing');
-    void session.sendAudio(blob, language, endedAt).then(ok => {
+    void session.sendAudio(blob, language, endedAt, capture).then(ok => {
       if (!ok && activeRef.current) stop('Не удалось отправить запись. Проверьте соединение и начните разговор снова.');
     });
   });
@@ -108,6 +108,9 @@ export default function App() {
   useEffect(() => { if (history.current) history.current.scrollTop = history.current.scrollHeight; }, [session.messages]);
   useEffect(() => { if (active && session.connection === 'local' && phase !== 'connecting') stop('Соединение потеряно. Начните разговор снова.'); }, [session.connection]);
   useEffect(() => { if (active && mic.error) stop(mic.error); }, [mic.error]);
+  useEffect(() => {
+    if (active && phase === 'listening' && mic.phase === 'stopping') setPhase('processing');
+  }, [active, phase, mic.phase]);
   useEffect(() => () => {
     activeRef.current = false;
     player.current?.pause();

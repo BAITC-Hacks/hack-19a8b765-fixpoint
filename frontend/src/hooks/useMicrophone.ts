@@ -3,8 +3,9 @@ import { LEVEL_INTERVAL_MS, VoiceActivityDetector } from '../voiceActivity';
 
 type Input = { stream: MediaStream; context: AudioContext; analyser: AnalyserNode; noiseFloor?: number };
 type Recording = { recorder: MediaRecorder; interval: number; ready: (ok: boolean) => void };
+export type CaptureDiagnostics = { duration_ms: number; silence_ms: number; endpoint: 'silence' | 'timeout' };
 
-export function useMicrophone(onAudio: (audio: Blob, endedAt: number) => void) {
+export function useMicrophone(onAudio: (audio: Blob, endedAt: number, capture: CaptureDiagnostics) => void) {
   const [phase, setPhase] = useState<'idle' | 'starting' | 'listening' | 'stopping'>('idle');
   const [error, setError] = useState('');
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -78,6 +79,7 @@ export function useMicrophone(onAudio: (audio: Blob, endedAt: number) => void) {
       const chunks: BlobPart[] = [];
       const started = performance.now();
       const detector = new VoiceActivityDetector(started, device.noiseFloor, endOfSpeechMs);
+      let capture: CaptureDiagnostics = { duration_ms: 0, silence_ms: 0, endpoint: 'timeout' };
       let ready!: (ok: boolean) => void;
       const readiness = new Promise<boolean>(resolve => { ready = resolve; });
       const recording: Recording = { recorder, interval: 0, ready };
@@ -92,7 +94,7 @@ export function useMicrophone(onAudio: (audio: Blob, endedAt: number) => void) {
         // abort/end/unmount releases the actual microphone and AudioContext.
         device.noiseFloor = detector.noiseFloor;
         setPhase('idle');
-        if (detector.heardSpeech && chunks.length) callback.current(new Blob(chunks, { type: recorder.mimeType }), detector.lastVoiceAt);
+        if (detector.heardSpeech && chunks.length) callback.current(new Blob(chunks, { type: recorder.mimeType }), detector.lastVoiceAt, capture);
         else setError('Речь не обнаружена. Начните разговор снова.');
       };
       recorder.onerror = () => {
@@ -119,6 +121,9 @@ export function useMicrophone(onAudio: (audio: Blob, endedAt: number) => void) {
           const finished = detector.observe(Math.sqrt(energy / samples.length), now);
           announceReady();
           if (finished || now - started >= 30000) {
+            capture = { duration_ms: Math.round(now - started),
+              silence_ms: Math.round(Math.max(0, now - detector.lastVoiceAt)),
+              endpoint: finished ? 'silence' : 'timeout' };
             window.clearInterval(recording.interval);
             setPhase('stopping');
             if (recorder.state === 'recording') recorder.stop();

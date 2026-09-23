@@ -80,7 +80,8 @@ def test_audio_archive_saves_playback_metric_without_audio_or_key(monkeypatch):
             ws.receive_json()
             ws.send_json({'type':'audio.start', 'payload':{'mime':'audio/webm'}})
             ws.send_json({'type':'audio.chunk', 'payload':{'data':base64.b64encode(b'distinctive-input-audio').decode()}})
-            ws.send_json({'type':'audio.end', 'request_id':'audio-1', 'payload':{'speak':True}})
+            capture = {'duration_ms': 1830, 'silence_ms': 500, 'endpoint': 'silence'}
+            ws.send_json({'type':'audio.end', 'request_id':'audio-1', 'payload':{'speak':True, 'capture':capture}})
             while True:
                 event = ws.receive_json()
                 if event['type'] == 'turn.completed':
@@ -92,7 +93,9 @@ def test_audio_archive_saves_playback_metric_without_audio_or_key(monkeypatch):
     with TestClient(app) as client:
         saved = client.get(f'/api/sessions/{sid}').json()
         assert saved['traces'][0]['latency_ms']['total'] == 2345
+        assert saved['traces'][0]['capture'] == capture
         assert saved['turns'][0]['input']['source'] == 'audio'
+        assert saved['turns'][0]['input']['capture'] == capture
         assert saved['turns'][0]['trace']['transcript'] == 'Где офис?'
         text = (settings.session_archive_dir / f'{sid}.json').read_text(encoding='utf-8')
         assert 'audio_base64' not in text and 'secret-that-must-not-be-saved' not in text

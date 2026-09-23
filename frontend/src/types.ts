@@ -7,6 +7,7 @@ export type Trace = {
   alternatives: { scenario_id: string; confidence: number }[];
   reason: string; slots: Record<string, unknown>; actions: unknown[];
   latency_ms: Record<string, number | null>;
+  capture?: { duration_ms: number; silence_ms: number; endpoint: 'silence' | 'timeout' } | null;
   status?: string;
 };
 export type ServerEvent = { type: string; event_id: number; turn_id?: string; payload: Record<string, unknown> };

@@ -1,6 +1,7 @@
 import { useEffect, useReducer, useRef, useState } from 'react';
 import { initialState, sessionReducer } from '../state/sessionReducer';
 import type { Language, ServerEvent } from '../types';
+import type { CaptureDiagnostics } from './useMicrophone';
 
 export type CompletedAudio = { turnId: string; segments: string[]; mime: string; failed: boolean; endedAt: number; error?: string };
 
@@ -124,7 +125,7 @@ export function useSession() {
     return true;
   }
 
-  async function sendAudio(blob: Blob, language: Language, speechEndedAt: number) {
+  async function sendAudio(blob: Blob, language: Language, speechEndedAt: number, capture: CaptureDiagnostics) {
     const ws = socket.current;
     if (pending.current || state.closed || ws?.readyState !== WebSocket.OPEN || blob.size === 0 || blob.size > 12 * 1024 * 1024) return false;
     const bytes = new Uint8Array(await blob.arrayBuffer());
@@ -133,12 +134,14 @@ export function useSession() {
     for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
     const id = crypto.randomUUID();
     pending.current = true;
-    endedAt.current = speechEndedAt;
+    // A timeout does not locate the true end of speech, so total latency
+    // remains unmeasured rather than starting from a misleading noise frame.
+    endedAt.current = capture.endpoint === 'silence' ? speechEndedAt : 0;
     segments.current = []; audioMime.current = 'audio/mpeg'; audioFailed.current = false; turnError.current = '';
     try {
       ws.send(JSON.stringify({ type: 'audio.start', payload: { mime: blob.type, language } }));
       ws.send(JSON.stringify({ type: 'audio.chunk', payload: { data: btoa(binary) } }));
-      ws.send(JSON.stringify({ type: 'audio.end', request_id: id, payload: { speak: true } }));
+      ws.send(JSON.stringify({ type: 'audio.end', request_id: id, payload: { speak: true, capture } }));
       timer.current = setTimeout(() => dispatch({ type: 'error', error: 'Ответ задерживается. Результат операции неизвестен.' }), 60000);
       return true;
     } catch {

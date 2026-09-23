@@ -24,6 +24,7 @@ export default function TracePanel({ traces, openByDefault = false }: { traces: 
         <dt>Сценарии</dt><dd>{trace.scenarios.map(s => `${s.scenario_id}${s.name ? ` · ${s.name}` : ''} (${Math.round(s.confidence * 100)}%)`).join(', ') || '—'}</dd>
         <dt>Обоснование</dt><dd>{trace.reason}</dd>
         <dt>Альтернативы</dt><dd>{trace.alternatives.map(s => `${s.scenario_id} (${Math.round(s.confidence * 100)}%)`).join(', ') || '—'}</dd>
+        {trace.capture && <><dt>Запись в браузере</dt><dd>{trace.capture.duration_ms} мс · остановка: {trace.capture.endpoint === 'timeout' ? 'лимит 30 с' : 'пауза'} · пауза по детектору: {trace.capture.silence_ms} мс</dd></>}
         <dt>Задержки</dt><dd>{Object.entries(trace.latency_ms).map(([key, value]) => <div key={key}>{key}: {value == null ? 'не измерено' : `${value} мс`}</div>)}</dd>
       </dl>
       <p className="muted">Уверенность модели — сигнал для выбора действия, а не вероятность правильного ответа.</p>
