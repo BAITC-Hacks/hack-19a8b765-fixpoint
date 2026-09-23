@@ -1,4 +1,4 @@
-# Контракт текстового хода
+# Контракт текстового и голосового хода
 
 Сервер: `http://127.0.0.1:8000`, интерактивная схема: `/docs`.
 
@@ -21,13 +21,16 @@
 - `text`: ответ робота или null при ошибке провайдера.
 - `state`: история, active_scenario, active_slots, waiting_slot, pending_operation,
   slot_sources, suspended, queued, language, client_identified.
-- `trace`: turn, transcript, language, response_language, scenarios, alternatives,
+- `trace`: turn, transcript, language, response_language, confidence, confidence_source, scenarios, alternatives,
   reason, slots, actions, latency_ms, status, mode, errors.
 - `events`: подробные события, включая аудио при `speak=true`; используется Streamlit.
 
 `scenarios` — список объектов `{scenario_id, confidence, reason, slots}`. `trace.slots`
 разделены по scenario_id. Actions явно различают preview, execute и error.
 `reason` — краткое объяснение выбора по данным, не скрытые рассуждения модели.
+`trace.confidence` — оценка первого сценария только для маршрутизации LLM (`confidence_source=llm`),
+иначе `null`: подтверждения по правилу диалога и ручной демо-выбор не выдают за уверенность модели.
+Пороги Case: от 0,75 запуск, от 0,45 до 0,75 уточнение, ниже 0,45 низкая уверенность.
 
 Снимок: `GET /api/sessions/{id}`. Трассировки: `GET /api/sessions/{id}/trace`.
 Сброс: `DELETE /api/sessions/{id}`. Сессии изолированы, хранятся в памяти, удаляются после
@@ -47,17 +50,24 @@
 При повторе возвращаются исходные ID событий. Принятый ход завершается и сохраняется
 при разрыве соединения; состояние доступно через snapshot. Сам frontend пока не восстанавливает соединение.
 
-Для текстового пути `speak=false` по умолчанию. Streamlit может получать MP3 в events.
-Голосовой протокол: `audio.start` с MIME → binary или `audio.chunk` → `audio.end`.
-STT вызывается после окончания записи, промежуточной потоковой транскрипции нет.
-Один `audio.segment` — полный MP3 одного предложения. Первоначальный `/ws/voice`
-принимает поле `event`: `audio_start`, `audio_chunk`, `speech_end`, `text_input`.
+Frontend отправляет текст с `speak=false`. Для голоса он отправляет
+`audio.start` с `payload.mime` и `language=auto`, затем `audio.chunk`
+с base64 в `payload.data`, затем `audio.end` с постоянным `request_id` и
+`payload.speak=true`. Сервер принимает запись до 12 МБ. STT вызывается после
+окончания записи, промежуточной потоковой транскрипции нет. Ответ содержит
+`transcript.final`, `assistant.text`, `audio.segment` с base64 MP3 и `mime=audio/mpeg`,
+`trace.updated` и `turn.completed`. Ошибка TTS приходит как `turn.status`
+с `code=tts_unavailable`: текст и выполненные операции при этом сохраняются.
+Повтор `request_id` не исполняет операцию второй раз.
 
 ## Метрики и оценка
 
-`latency_ms.total=null`: фактическое начало звука браузером не измерено. `server_first_audio`
-измеряет готовность первого сегмента на сервере. Триаж включён в маршрутизатор; отдельно
-не измеряется. Текстовые ходы имеют `stt=null`.
+Браузер после начала воспроизведения посылает `playback.started` с
+`payload.ttfa_ms` и `turn_id`. Сервер добавляет клиентское измерение
+в `trace.latency_ms.total` и посылает новый `trace.updated`.
+До этого `total=null`; для текстовых ходов он остаётся неизвестным.
+`server_first_audio` измеряет готовность сегмента на сервере.
+Триаж отдельно не измеряется, текстовые ходы имеют `stt=null`.
 
 `POST /api/route` выполняет только маршрутизацию независимой реплики. Без ключа — 503.
 `python scripts/evaluate_router.py` генерирует predictions для всех 104 реплик и вызывает

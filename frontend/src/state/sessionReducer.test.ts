@@ -21,3 +21,12 @@ test('unknown timings stay null; trace updates replace the same turn', () => {
   assert.equal(updated.traces.length, 1);
   assert.equal(updated.traces[0].latency_ms.total, null);
 });
+
+test('audio transcript and answer share one server turn without duplicates', () => {
+  const transcript = { type: 'event' as const, event: { type: 'transcript.final', event_id: 1, turn_id: 'turn-1', payload: { text: 'Где офис?', source: 'audio' } } };
+  const answer = { type: 'event' as const, event: { type: 'assistant.text', event_id: 2, turn_id: 'turn-1', payload: { text: 'В Алматы.', language: 'ru' } } };
+  const state = sessionReducer(sessionReducer(initialState, transcript), answer);
+  assert.deepEqual(state.messages.map(m => m.text), ['Где офис?', 'В Алматы.']);
+  assert.equal(sessionReducer(state, answer).messages.length, 2);
+  assert.equal(state.messages[1].language, 'ru');
+});

@@ -131,6 +131,8 @@ def health():
     return {'status':'ok','provider':settings.provider,
             'model':settings.model if settings.provider!='mock' else None,
             'llm_ready':settings.provider!='mock' and bool(settings.key),
+            'stt_ready':settings.stt_provider=='openai' and bool(settings.key),
+            'tts_ready':settings.tts_provider=='openai' and bool(settings.key),
             'dataset':catalog.summary(),'scenarios':len(catalog.scenarios),'as_of_date':str(catalog.as_of)}
 
 @app.get('/api/scenarios')
@@ -243,6 +245,10 @@ async def voice(ws: WebSocket,session_id: str | None = None):
                     ms = float(payload['ttfa_ms'])
                     if not 0<=ms<=300000:
                         raise ValueError('Некорректная задержка воспроизведения.')
+                    turn_id = payload.get('turn_id')
+                    if modern and turn_id and entry['traces'] and turn_id == f"turn-{entry['traces'][-1]['turn']}":
+                        entry['traces'][-1]['latency_ms']['total'] = ms
+                        await send(None, wire_event(entry,'trace.updated',entry['traces'][-1],turn_id))
                     await send({'event':'playback_metric','client_ttfa_ms':ms},wire_event(entry,'playback.metric',{'client_ttfa_ms':ms,'source':'client_reported'}))
                 else:
                     raise ValueError('Неизвестное событие.')

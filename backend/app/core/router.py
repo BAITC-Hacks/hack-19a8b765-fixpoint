@@ -1,4 +1,5 @@
-from .models import RoutingDecision, Candidate
+import json
+from .models import RoutingDecision, Candidate, WireRoutingDecision
 from ..services.llm import ProviderError
 
 ROUTING_PROMPT = '''You route live conversations for fictional Saqta Insurance.
@@ -21,6 +22,8 @@ Confidence is an estimate, not a calibrated probability. Explain in one short ev
 for a supervisor (not private chain-of-thought). If unclear, ask one short question between two
 plausible interpretations. needs_operator is true only for explicit request or catalog handoff condition
 supported by the utterance. Merely mentioning a possible condition is insufficient.
+Return every required field. Slot arrays contain {name, value_json}, where value_json is a
+JSON-encoded string (for example \"almaty\", 12, or [\"000000000000\"]); use [] if no slots.
 Do not execute actions or promise success. Routing is your only responsibility.'''
 
 class Router:
@@ -37,7 +40,34 @@ class Router:
                    'as_of_date': str(self.catalog.as_of), 'catalog': self.catalog.routing_catalog(),
                    'system_intents': list(self.catalog.system.values()),
                    'slot_definitions': [{k: v for k, v in s.items() if k != 'prompt'} for s in self.catalog.slots.values()]}
-        d = await self.llm.structured(ROUTING_PROMPT, payload, RoutingDecision)
+        wire = await self.llm.structured(ROUTING_PROMPT, payload, WireRoutingDecision)
+        if isinstance(wire, RoutingDecision):
+            d = wire  # Allows injected decisions in local executor tests.
+        else:
+            try:
+                def slots(values):
+                    parsed = {}
+                    for slot in values:
+                        try:
+                            parsed[slot.name] = json.loads(slot.value_json)
+                        except json.JSONDecodeError:
+                            # A bare place/name is still a string; downstream slot
+                            # validation decides whether that value is permitted.
+                            if slot.value_json.startswith(('[', '{', '"')):
+                                raise
+                            parsed[slot.name] = slot.value_json
+                    return parsed
+                d = RoutingDecision(
+                    scenarios=[Candidate(scenario_id=s.scenario_id, confidence=s.confidence,
+                                         reason=s.reason, slots=slots(s.slots)) for s in wire.scenarios],
+                    alternatives=[Candidate(scenario_id=s.scenario_id, confidence=s.confidence,
+                                            reason=s.reason, slots=slots(s.slots)) for s in wire.alternatives],
+                    language=wire.language, response_language=wire.response_language,
+                    slots=slots(wire.slots), is_continuation=wire.is_continuation,
+                    is_topic_switch=wire.is_topic_switch, resume_previous=wire.resume_previous,
+                    needs_operator=wire.needs_operator, reason=wire.reason, clarification=wire.clarification)
+            except (ValueError, TypeError) as exc:
+                raise ProviderError('LLM вернула неверные значения слотов; действие не выполнялось.') from exc
         allowed = self.catalog.scenarios.keys() | self.catalog.system.keys()
         if any(c.scenario_id not in allowed for c in d.scenarios + d.alternatives):
             raise ProviderError('LLM вернула неизвестный сценарий; действие не выполнялось.')
