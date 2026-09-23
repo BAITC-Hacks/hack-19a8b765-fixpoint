@@ -7,6 +7,9 @@ const states = {
   speaking: { label: 'Ответ', status: 'Помощник отвечает', hint: 'Ответ также появится в истории', action: 'Остановить ответ' },
   microphone: { label: 'Ошибка микрофона', status: 'Микрофон недоступен', hint: 'Можно продолжить разговор текстом', action: 'Повторить попытку' },
   disconnected: { label: 'Нет связи', status: 'Соединение прервано', hint: 'История разговора сохранена на экране', action: 'Повторить подключение' },
+  confirmation: { label: 'Подтверждение операции', status: 'Нужно подтверждение', hint: 'Проверьте данные перед изменением', action: 'Подтвердить' },
+  success: { label: 'Операция выполнена', status: 'Готово', hint: 'Изменение сохранено в тестовых данных', action: 'Продолжить разговор' },
+  handoff: { label: 'Передача оператору', status: 'Передача подготовлена', hint: 'Контекст разговора сохранён для оператора', action: 'Начать новый разговор' },
   closed: { label: 'Разговор завершён', status: 'Разговор завершён', hint: 'Вы можете начать новый разговор', action: 'Начать новый разговор' },
 };
 type Phase = keyof typeof states;
@@ -17,6 +20,9 @@ export default function DesignPreview({ onExit }: { onExit: () => void }) {
   const [language, setLanguage] = useState('ru');
   const state = states[phase];
   const error = phase === 'microphone' || phase === 'disconnected';
+  const businessState = phase === 'confirmation' || phase === 'success' || phase === 'handoff';
+  const scenario = phase === 'closed' ? 'SYS_GOODBYE' : phase === 'handoff' ? 'SC37' : businessState ? 'SC28' : 'SC17';
+  const scenarioTitle = phase === 'closed' ? 'Завершение разговора' : phase === 'handoff' ? 'Передача оператору' : businessState ? 'Изменение контактных данных' : 'Статус страхового случая';
   function advance() {
     setPhase(phase === 'idle' || error ? 'listening' : phase === 'listening' ? 'processing' : 'idle');
   }
@@ -31,8 +37,11 @@ export default function DesignPreview({ onExit }: { onExit: () => void }) {
           <div className="history preview-history" role="log" aria-label="Пример диалога">
             {phase === 'idle' ? <div className="empty"><span className="empty-kicker">Здравствуйте, это Saqta</span><h2>Чем можем помочь?</h2><p>Задайте вопрос о полисе, страховом случае<br />или условиях страхования.</p><div className="topic-labels"><span>Полисы</span><span>Страховые случаи</span><span>Консультации</span></div></div> : <>
               <div className="conversation-date">Пример разговора</div>
-              <article className="message user"><span className="message-role">Вы <span>RU</span></span><p>{phase === 'closed' ? 'Спасибо, до свидания!' : 'Здравствуйте! Хочу узнать статус своего страхового случая.'}</p></article>
+              <article className="message user"><span className="message-role">Вы <span>RU</span></span><p>{phase === 'closed' ? 'Спасибо, до свидания!' : phase === 'handoff' ? 'Соедините меня с оператором.' : businessState ? 'Хочу изменить номер телефона.' : 'Здравствуйте! Хочу узнать статус своего страхового случая.'}</p></article>
               {phase === 'closed' && <article className="message assistant"><span className="message-role">Saqta <span>Пример ответа</span></span><p>До свидания! Обращайтесь, если понадобится помощь.</p></article>}
+              {phase === 'confirmation' && <article className="message assistant"><span className="message-role">Saqta <span>Пример ответа</span></span><p>Проверьте новый номер: +7 ••• ••• 45 67. Подтверждаете изменение?</p></article>}
+              {phase === 'success' && <article className="message assistant"><span className="message-role">Saqta <span>Пример результата</span></span><p>Номер телефона изменён в тестовых данных.</p></article>}
+              {phase === 'handoff' && <article className="message assistant"><span className="message-role">Saqta <span>Пример ответа</span></span><p>Подготовила передачу оператору вместе с контекстом разговора. В демо реальный звонок не выполняется.</p></article>}
               {phase === 'speaking' && <article className="message assistant"><span className="message-role">Saqta <span>Пример ответа</span></span><p>Подскажите номер вашего страхового случая.</p></article>}
               {phase === 'listening' && <div className="partial"><span>Пример распознавания</span><p>Номер моего страхового случая…</p></div>}
               {phase === 'processing' && <div className="processing-preview"><span className="typing-dots" aria-hidden="true"><i/><i/><i/></span> Помощник готовит ответ</div>}
@@ -41,16 +50,18 @@ export default function DesignPreview({ onExit }: { onExit: () => void }) {
           <div className={`controls preview-controls phase-${phase}`}>
             {error && <div className="error" role="alert"><strong>{phase === 'microphone' ? 'Не удалось получить доступ к микрофону' : 'Не удалось связаться с помощником'}</strong><p>{phase === 'microphone' ? 'Проверьте разрешение в браузере. Пока можно написать сообщение.' : 'Проверьте интернет. Последняя реплика не отправляется повторно автоматически.'}</p></div>}
             <div className="voice-stage"><div className="voice-glyph" aria-hidden="true">{[11,20,31,42,25,36,18].map((height, index) => <i key={index} style={{height, animationDelay: `${index * .12}s`}} />)}</div><div className="voice-status" role="status">{state.status}</div><p>{state.hint}</p></div>
-            <div className="voice-controls"><label className="language">Язык речи<select value={language} disabled={phase === 'closed'} onChange={e => setLanguage(e.target.value)}><option value="ru">Русский</option><option value="kk">Қазақша</option></select></label><button className={`primary microphone ${phase === 'listening' ? 'recording' : ''}`} disabled={phase === 'processing'} onClick={advance}><span aria-hidden="true">{phase === 'listening' || phase === 'speaking' ? '■' : phase === 'closed' ? '＋' : '↗'}</span>{state.action}</button></div>
-            {phase !== 'closed' && <><div className="composer preview-composer"><span>Введите сообщение…</span><button disabled aria-label="Отправка недоступна в предпросмотре">↑</button></div><p className="input-help">Поле ввода показано как образец · для ввода вернитесь к чату</p></>}
+            {phase === 'confirmation' ? <div className="decision-card" aria-label="Подтверждение тестовой операции"><div><span>Будет изменено</span><strong>Контактный номер телефона</strong><small>Только тестовые данные</small></div><div className="decision-actions"><button onClick={() => setPhase('idle')}>Отменить</button><button className="primary" onClick={() => setPhase('success')}>Подтвердить</button></div></div> : businessState || phase === 'closed' ? <button className="primary result-action" onClick={() => setPhase('idle')}>{state.action}</button> : <>
+              <div className="voice-controls"><label className="language">Язык речи<select value={language} onChange={e => setLanguage(e.target.value)}><option value="ru">Русский</option><option value="kk">Қазақша</option></select></label><button className={`primary microphone ${phase === 'listening' ? 'recording' : ''}`} disabled={phase === 'processing'} onClick={advance}><span aria-hidden="true">{phase === 'listening' || phase === 'speaking' ? '■' : '↗'}</span>{state.action}</button></div>
+              <div className="composer preview-composer"><span>Введите сообщение…</span><button disabled aria-label="Отправка недоступна в предпросмотре">↑</button></div><p className="input-help">Поле ввода показано как образец · для ввода вернитесь к чату</p>
+            </>}
           </div>
         </section>
         <div className="preview-footnote"><span>Демонстрация интерфейса</span><span>Все данные на этом экране — примеры</span></div>
       </div>
       {inspector && <aside className="preview-inspector" id="preview-inspector" aria-label="Пример диагностики"><div className="inspector-title"><div><p className="eyebrow">ИНСПЕКТОР</p><h2>Диагностика</h2></div><button aria-label="Закрыть диагностику" onClick={() => setInspector(false)}>×</button></div><p className="sample-notice">Тестовые данные, не результат LLM</p>
-        <section className="inspector-section"><h3>Выбранный сценарий</h3><span className="scenario-chip">{phase === 'closed' ? 'SYS_GOODBYE' : 'SC17'}</span><h4>{phase === 'closed' ? 'Завершение разговора' : 'Статус страхового случая'}</h4><p>{phase === 'closed' ? 'В примере клиент прощается с помощником.' : 'В примере клиент спрашивает о ходе рассмотрения заявления.'}</p></section>
-        <section className="inspector-section"><h3>Контекст</h3><dl><dt>Язык</dt><dd>Русский · RU</dd><dt>Следующий шаг</dt><dd>{phase === 'closed' ? 'Новый разговор по желанию клиента' : 'Уточнение номера заявления'}</dd><dt>Уверенность</dt><dd>Не рассчитана</dd></dl></section>
-        <section className="inspector-section"><h3>Параметры и действия</h3><p>{phase === 'closed' ? 'Сессия завершена. Действия не выполнялись.' : 'Номер заявления ещё не получен. Действия не выполнялись.'}</p></section>
+        <section className="inspector-section"><h3>Выбранный сценарий</h3><span className="scenario-chip">{scenario}</span><h4>{scenarioTitle}</h4><p>{phase === 'closed' ? 'В примере клиент прощается с помощником.' : phase === 'handoff' ? 'Клиент явно просит соединить его с человеком.' : businessState ? 'В примере клиент изменяет контактные данные.' : 'В примере клиент спрашивает о ходе рассмотрения заявления.'}</p></section>
+        <section className="inspector-section"><h3>Контекст</h3><dl><dt>Язык</dt><dd>Русский · RU</dd><dt>Следующий шаг</dt><dd>{phase === 'closed' ? 'Новый разговор по желанию клиента' : phase === 'confirmation' ? 'Явное согласие или отмена' : phase === 'success' ? 'Продолжение разговора' : phase === 'handoff' ? 'Завершение тестовой сессии' : 'Уточнение номера заявления'}</dd><dt>Уверенность</dt><dd>Не рассчитана</dd></dl></section>
+        <section className="inspector-section"><h3>Параметры и действия</h3><p>{phase === 'closed' ? 'Сессия завершена. Действия не выполнялись.' : phase === 'confirmation' ? 'update_contact: preview. Запись не выполнялась.' : phase === 'success' ? 'update_contact: execute. Получен результат тестовой операции.' : phase === 'handoff' ? 'transfer_to_operator: execute. Реальный звонок не выполняется.' : 'Номер заявления ещё не получен. Действия не выполнялись.'}</p></section>
         <section className="inspector-section"><h3>Время обработки</h3>{['Распознавание речи', 'Выбор сценария', 'Подготовка ответа', 'До начала звука'].map(label => <div className="timing-row" key={label}><span>{label}</span><span>—</span></div>)}<p className="timing-note">В предпросмотре время не измеряется.</p></section>
       </aside>}
     </main>
